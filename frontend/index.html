@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AuthGuard-X</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+:root{
+--bg:#060b1f;
+--card:rgba(20,26,46,.85);
+--accent:#00f7ff;
+--danger:#ff4d4d;
+--warn:#ffd700;
+--safe:#00ff99;
+--glass:rgba(255,255,255,.06);
+}
+
+*{box-sizing:border-box}
+body{
+margin:0;
+font-family:Inter;
+color:#fff;
+background:#020617;
+overflow-x:hidden;
+transition:.4s;
+}
+
+body.hacker{
+--accent:#22c55e;
+background:#000;
+}
+
+h1{
+font-family:Orbitron;
+text-align:center;
+color:var(--accent);
+letter-spacing:2px;
+}
+
+.container{max-width:1400px;margin:auto;padding:20px}
+
+.login{
+max-width:420px;
+margin:100px auto;
+background:var(--card);
+padding:35px;
+border-radius:18px;
+}
+
+input,button{
+width:100%;
+padding:14px;
+border-radius:10px;
+border:none;
+margin:10px 0;
+background:var(--glass);
+color:#fff;
+}
+
+button{
+background:linear-gradient(135deg,var(--accent),#3cf);
+font-weight:700;
+cursor:pointer;
+}
+
+.dashboard{display:none}
+
+.cards{
+display:grid;
+grid-template-columns:repeat(4,1fr);
+gap:20px;
+}
+
+/* ===== CARD CURSOR GLASS EFFECT ===== */
+.card{
+position:relative;
+background:var(--card);
+padding:22px;
+border-radius:18px;
+overflow:hidden;
+}
+
+.card::before{
+content:"";
+position:absolute;
+inset:0;
+background:radial-gradient(
+180px circle at var(--x,50%) var(--y,50%),
+rgba(255,255,255,0.12),
+transparent 60%
+);
+opacity:0;
+transition:opacity .25s;
+pointer-events:none;
+}
+
+.card:hover::before{
+opacity:1;
+}
+/* =================================== */
+
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px;text-align:center}
+
+.high{color:var(--danger)}
+.mid{color:var(--warn)}
+.low{color:var(--safe)}
+
+.badge{
+padding:5px 10px;
+border-radius:12px;
+font-size:.75rem;
+}
+
+#map{
+width:100%;
+height:350px;
+border-radius:16px;
+overflow:hidden;
+position:relative;
+background:#020617;
+}
+
+#map img{
+width:100%;
+height:100%;
+opacity:.45;
+filter:invert(1);
+}
+
+.attack-dot{
+position:absolute;
+width:12px;height:12px;
+border-radius:50%;
+background:#ff4d4d;
+animation:pulseDot 1.5s infinite;
+}
+
+@keyframes pulseDot{
+from{transform:scale(1);opacity:1}
+to{transform:scale(3);opacity:0}
+}
+
+/* TOGGLE – restored neutral color */
+#toggle{
+position:fixed;
+top:20px;
+left:20px;
+padding:10px 14px;
+background:#111;
+border-radius:12px;
+cursor:pointer;
+color:#fff;
+}
+</style>
+</head>
+
+<body>
+
+<div id="toggle" onclick="toggleMode()">🟢 Hacker Mode</div>
+
+<div class="container">
+<h1>AuthGuard-X SOC</h1>
+
+<div class="login" id="loginBox">
+<div style="
+margin-top:15px;
+padding:12px;
+border-radius:12px;
+background:rgba(0,247,255,.08);
+font-size:.9rem;
+text-align:center;
+">
+<b style="color:#00f7ff">Demo Credentials</b><br>
+Username: <span style="cursor:pointer;color:#00ff99"
+onclick="fillDemo()">admin</span><br>
+Password: <span style="cursor:pointer;color:#00ff99"
+onclick="fillDemo()">admin123</span>
+</div>
+
+<input id="user" placeholder="Username">
+<input id="pass" type="password" placeholder="Password">
+<button onclick="login()">Login</button>
+<p id="msg"></p>
+</div>
+
+<div class="dashboard" id="dash">
+
+<div class="cards">
+<div class="card">Total Attacks<br><b id="total">0</b></div>
+<div class="card">Active Threats<br><b id="active">0</b></div>
+<div class="card">High Risk<br><b id="high">0</b></div>
+<div class="card">Health<br><b id="health">100</b></div>
+</div>
+
+<div class="card" style="margin-top:20px">
+<button onclick="simulate('Brute Force',85)">Simulate Brute Force (High risk)</button>
+<button onclick="simulate('Bot Login',55)">Simulate Bot (Low risk)</button>
+</div>
+
+<div class="card" style="margin-top:20px">
+<h3>Threat Timeline</h3>
+<canvas id="timeline"></canvas>
+<button onclick="replayTimeline()">Replay</button>
+</div>
+
+<div class="card" style="margin-top:20px">
+<h3>Global Attack Map</h3>
+<div id="map">
+<img src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg">
+</div>
+</div>
+
+<div class="card" style="margin-top:20px">
+<h3>Attack Logs</h3>
+<table>
+<thead>
+<tr><th>ID</th><th>User</th><th>Attack</th><th>Risk</th><th>Status</th></tr>
+</thead>
+<tbody id="logs"></tbody>
+</table>
+</div>
+
+</div>
+</div>
+
+<script>
+let chart,fullData=[];
+
+/* LOGIN */
+async function login(){
+const r=await fetch("http://127.0.0.1:5000/login",{
+method:"POST",
+headers:{"Content-Type":"application/json"},
+body:JSON.stringify({username:user.value,password:pass.value})
+});
+if(r.status===200){
+loginBox.style.display="none";
+dash.style.display="block";
+load();
+}else msg.innerText="Invalid Login";
+}
+
+/* SIMULATE */
+async function simulate(type,risk){
+await fetch("http://127.0.0.1:5000/log_attack",{
+method:"POST",
+headers:{"Content-Type":"application/json"},
+body:JSON.stringify({
+username:"simulator",
+attack:type,
+behavior:"auto",
+risk:risk
+})
+});
+addAttack(Math.random()*90+5,Math.random()*60+20);
+load();
+}
+
+/* LOAD */
+async function load(){
+const r=await fetch("http://127.0.0.1:5000/get_logs");
+const data=await r.json();
+logs.innerHTML="";
+let h=100,hi=0,ac=0;
+let sev=[];
+
+data.forEach(l=>{
+let cls=l.risk>=70?"high":l.risk>=40?"mid":"low";
+let badge=l.risk<40?"Trusted":l.risk<70?"Monitored":"Risky";
+logs.innerHTML+=`
+<tr>
+<td>${l.id}</td>
+<td>${l.username}</td>
+<td>${l.attack}</td>
+<td class="${cls}">${l.risk}</td>
+<td>${badge}</td>
+</tr>`;
+h-=l.risk>=70?5:l.risk>=40?2:0;
+if(l.risk>=70)hi++;
+if(l.risk>=50)ac++;
+sev.push(l.risk);
+});
+
+total.innerText=data.length;
+high.innerText=hi;
+active.innerText=ac;
+health.innerText=Math.max(h,0);
+drawTimeline(sev);
+}
+
+/* CHART */
+function drawTimeline(d){
+fullData=[...d];
+renderChart(d);
+}
+
+function renderChart(d){
+const ctx=document.getElementById("timeline");
+if(chart)chart.destroy();
+chart=new Chart(ctx,{
+type:"line",
+data:{labels:d.map((_,i)=>i+1),
+datasets:[{data:d,borderColor:"#ff4d4d",fill:false}]},
+options:{scales:{y:{beginAtZero:true,max:100}}}
+});
+}
+
+function replayTimeline(){
+let i=0,tmp=[];
+const t=setInterval(()=>{
+tmp.push(fullData[i]);
+renderChart(tmp);
+i++;
+if(i>=fullData.length)clearInterval(t);
+},400);
+}
+
+/* MAP */
+const map=document.getElementById("map");
+function addAttack(x,y){
+const d=document.createElement("div");
+d.className="attack-dot";
+d.style.left=x+"%";
+d.style.top=y+"%";
+map.appendChild(d);
+setTimeout(()=>d.remove(),2000);
+}
+
+/* HACKER MODE */
+function toggleMode(){
+document.body.classList.toggle("hacker");
+}
+
+/* CARD CURSOR TRACKING */
+document.querySelectorAll(".card").forEach(card=>{
+card.addEventListener("mousemove",e=>{
+const r=card.getBoundingClientRect();
+card.style.setProperty("--x",`${e.clientX-r.left}px`);
+card.style.setProperty("--y",`${e.clientY-r.top}px`);
+});
+});
+function fillDemo(){
+  document.getElementById("user").value = "admin";
+  document.getElementById("pass").value = "admin123";
+}
+
+</script>
+
+</body>
+</html>
