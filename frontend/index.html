@@ -1,871 +1,746 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>AuthGuard-X | SOC Security Dashboard</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AuthGuard-X — Security Operations Center</title>
 
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-<style>
-:root{
---bg:#060b1f;
---card:rgba(20,26,46,.85);
---accent:#00f7ff;
---danger:#ff4d4d;
---warn:#ffd700;
---safe:#00ff99;
---glass:rgba(255,255,255,.06);
---text:#ffffff;
---muted:#94a3b8;
-}
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-*{box-sizing:border-box}
-body{
-margin:0;
-font-family:'Inter', sans-serif;
-color:var(--text);
-background:#020617;
-overflow-x:hidden;
-transition:background .4s, color .4s;
-min-height:100vh;
-}
-
-body.hacker{
---accent:#22c55e;
---bg:#000000;
-background:#000000;
-font-family:'Courier New', Courier, monospace;
-}
-
-h1{
-font-family:'Orbitron', sans-serif;
-text-align:center;
-color:var(--accent);
-letter-spacing:3px;
-margin:10px 0 5px 0;
-text-transform:uppercase;
-text-shadow:0 0 15px rgba(0,247,255,.3);
-}
-
-.subtitle{
-text-align:center;
-color:var(--muted);
-font-size:.85rem;
-margin-bottom:25px;
-letter-spacing:1px;
-}
-
-.container{max-width:1400px;margin:auto;padding:20px}
-
-/* HEADER CONTROLS */
-.header-bar{
-display:flex;
-justify-content:space-between;
-align-items:center;
-margin-bottom:15px;
-}
-
-.sim-banner{
-background:rgba(250,204,21,.1);
-border:1px solid rgba(250,204,21,.3);
-color:#facc15;
-padding:8px 16px;
-border-radius:10px;
-font-size:.8rem;
-display:flex;
-align-items:center;
-gap:8px;
-margin-bottom:15px;
-}
-
-/* LOGIN */
-.login{
-max-width:440px;
-margin:60px auto;
-background:var(--card);
-padding:35px;
-border-radius:18px;
-box-shadow:0 8px 32px rgba(0,0,0,.5);
-border:1px solid rgba(255,255,255,.08);
-}
-
-.demo-box{
-margin-bottom:20px;
-padding:14px;
-border-radius:12px;
-background:rgba(0,247,255,.08);
-font-size:.85rem;
-border:1px dashed rgba(0,247,255,.3);
-line-height:1.5;
-}
-
-input,button{
-width:100%;
-padding:13px;
-border-radius:10px;
-border:1px solid rgba(255,255,255,.12);
-margin:8px 0;
-background:var(--glass);
-color:#fff;
-font-size:.95rem;
-}
-
-input:focus{
-outline:none;
-border-color:var(--accent);
-box-shadow:0 0 10px rgba(0,247,255,.2);
-}
-
-button{
-background:linear-gradient(135deg,var(--accent),#0088cc);
-color:#020617;
-font-weight:700;
-cursor:pointer;
-border:none;
-transition:transform .15s, box-shadow .15s;
-}
-
-button:hover{
-transform:translateY(-1px);
-box-shadow:0 4px 15px rgba(0,247,255,.4);
-}
-
-button:active{
-transform:translateY(1px);
-}
-
-.btn-secondary{
-background:rgba(255,255,255,.08);
-color:#fff;
-border:1px solid rgba(255,255,255,.2);
-}
-.btn-secondary:hover{
-background:rgba(255,255,255,.16);
-box-shadow:none;
-}
-
-.btn-danger{
-background:linear-gradient(135deg, #ef4444, #b91c1c);
-color:#fff;
-}
-
-.btn-resolve{
-padding:5px 12px;
-font-size:.75rem;
-border-radius:6px;
-background:rgba(0,247,255,.15);
-color:var(--accent);
-border:1px solid var(--accent);
-cursor:pointer;
-width:auto;
-margin:0;
-}
-.btn-resolve:hover{
-background:var(--accent);
-color:#000;
-}
-
-.dashboard{display:none}
-
-.user-status-bar{
-display:flex;
-justify-content:space-between;
-align-items:center;
-background:var(--card);
-padding:12px 20px;
-border-radius:14px;
-margin-bottom:20px;
-border:1px solid rgba(255,255,255,.08);
-font-size:.85rem;
-}
-
-.cards{
-display:grid;
-grid-template-columns:repeat(4,1fr);
-gap:20px;
-}
-
-/* ===== CARD GLASS HOVER ===== */
-.card{
-position:relative;
-background:var(--card);
-padding:22px;
-border-radius:18px;
-overflow:hidden;
-border:1px solid rgba(255,255,255,.06);
-}
-
-.card h3{
-margin-top:0;
-font-size:1.05rem;
-letter-spacing:1px;
-color:var(--accent);
-display:flex;
-justify-content:space-between;
-align-items:center;
-}
-
-.card::before{
-content:"";
-position:absolute;
-inset:0;
-background:radial-gradient(
-180px circle at var(--x,50%) var(--y,50%),
-rgba(255,255,255,0.12),
-transparent 60%
-);
-opacity:0;
-transition:opacity .25s;
-pointer-events:none;
-}
-
-.card:hover::before{
-opacity:1;
-}
-
-.stat-value{
-font-size:2rem;
-font-weight:800;
-margin-top:8px;
-display:block;
-font-family:'Orbitron', sans-serif;
-}
-
-/* TABLE */
-table{width:100%;border-collapse:collapse;margin-top:10px}
-th,td{padding:11px 8px;text-align:center;border-bottom:1px solid rgba(255,255,255,.06);font-size:.85rem}
-th{color:var(--muted);font-weight:600;text-transform:uppercase;font-size:.75rem;letter-spacing:1px}
-
-.high{color:var(--danger);font-weight:700}
-.mid{color:var(--warn);font-weight:700}
-.low{color:var(--safe);font-weight:700}
-
-.badge{
-display:inline-block;
-padding:4px 9px;
-border-radius:12px;
-font-size:.72rem;
-font-weight:600;
-}
-.badge-risky{background:rgba(255,77,77,.2);color:#ff4d4d;border:1px solid rgba(255,77,77,.3)}
-.badge-monitored{background:rgba(250,204,21,.2);color:#ffd700;border:1px solid rgba(250,204,21,.3)}
-.badge-trusted{background:rgba(0,255,153,.2);color:#00ff99;border:1px solid rgba(0,255,153,.3)}
-.badge-sim{background:rgba(148,163,184,.2);color:#cbd5e1;border:1px solid rgba(148,163,184,.3);font-size:.65rem;margin-left:4px}
-.badge-resolved{background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)}
-
-/* MAP */
-#map{
-width:100%;
-height:340px;
-border-radius:16px;
-overflow:hidden;
-position:relative;
-background:#020617;
-border:1px solid rgba(255,255,255,.06);
-}
-
-#map img{
-width:100%;
-height:100%;
-opacity:.45;
-filter:invert(1);
-object-fit:cover;
-}
-
-.attack-dot{
-position:absolute;
-width:12px;height:12px;
-border-radius:50%;
-background:#ff4d4d;
-box-shadow:0 0 12px rgba(255,77,77,.8);
-animation:pulseDot 1.5s infinite;
-pointer-events:none;
-}
-
-@keyframes pulseDot{
-from{transform:scale(1);opacity:1}
-to{transform:scale(3);opacity:0}
-}
-
-/* TOGGLES & CONTROLS */
-#toggle{
-padding:8px 14px;
-background:#111;
-border-radius:12px;
-cursor:pointer;
-color:#fff;
-font-size:.85rem;
-border:1px solid rgba(255,255,255,.15);
-display:inline-block;
-}
-
-.sim-controls{
-display:grid;
-grid-template-columns:1fr 1fr 1fr;
-gap:12px;
-}
-
-.map-disclaimer{
-position:absolute;
-bottom:10px;
-right:12px;
-background:rgba(0,0,0,.7);
-padding:4px 10px;
-border-radius:6px;
-font-size:.7rem;
-color:var(--muted);
-pointer-events:none;
-}
-</style>
+  <!-- Modular Stylesheets -->
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/components.css">
 </head>
 
 <body>
 
-<div class="container">
-  <div class="header-bar">
-    <div id="toggle" onclick="toggleMode()">🟢 Hacker Mode</div>
-    <div id="authStatusText" style="font-size:.85rem;color:var(--muted)">Checking session...</div>
-  </div>
-
-  <h1>AuthGuard-X SOC</h1>
-  <div class="subtitle">Security Operations Center Simulation & Incident Hardening Platform</div>
-
-  <!-- SIMULATION DISCLAIMER BANNER -->
-  <div class="sim-banner">
-    <span>⚠️</span>
-    <span><b>DEMONSTRATION PLATFORM:</b> Incident feeds and attack map markers represent simulated data generated for SOC analyst training and security posture evaluation.</span>
-  </div>
-
-  <!-- LOGIN BOX -->
-  <div class="login" id="loginBox">
-    <h3 style="margin-top:0;text-align:center;color:var(--accent)">SOC Analyst Authentication</h3>
-
-    <div class="demo-box" id="demoBox" style="display:none">
-      <b style="color:var(--accent)">Development Demo Credentials</b><br>
-      <span style="font-size:.8rem;color:var(--muted)">Provisioned in development mode only:</span><br>
-      Username: <b id="demoUserLabel" style="cursor:pointer;color:var(--safe)" onclick="fillDemo()">admin</b><br>
-      Password: <b id="demoPassLabel" style="cursor:pointer;color:var(--safe)" onclick="fillDemo()">••••••••</b>
-    </div>
-
-    <input id="user" placeholder="Analyst Username" autocomplete="username">
-    <input id="pass" type="password" placeholder="Password" autocomplete="current-password">
-    <button id="loginBtn" onclick="login()">Authenticate Session</button>
-    <p id="msg" style="text-align:center;font-size:.85rem;color:var(--danger);min-height:1.2em"></p>
-  </div>
-
-  <!-- DASHBOARD -->
-  <div class="dashboard" id="dash">
-    <div class="user-status-bar">
-      <div>
-        <span>Logged in as: <b id="sessionUserDisplay" style="color:var(--accent)">-</b></span>
-        <span style="margin-left:15px">Role: <span id="sessionRoleBadge" class="badge badge-trusted">analyst</span></span>
-        <span id="envBadge" class="badge badge-sim" style="margin-left:10px">DEV</span>
+  <!-- =========================================================================
+       1. AUTHENTICATION GATE (LOGIN SCREEN)
+       ========================================================================= -->
+  <div id="login-page" class="login-container" style="display: none;">
+    <div class="login-card">
+      <div class="login-header">
+        <div class="brand-badge">
+          <svg class="brand-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          <span class="brand-title">AUTHGUARD-X</span>
+        </div>
+        <h1 class="login-heading">Security Analyst Portal</h1>
+        <p class="login-subheading">Authenticate to access the Security Operations Center dashboard and incident feeds.</p>
       </div>
-      <div>
-        <button onclick="logout()" class="btn-secondary" style="width:auto;padding:6px 14px;margin:0;font-size:.8rem">End Session (Logout)</button>
-      </div>
-    </div>
 
-    <!-- METRIC CARDS -->
-    <div class="cards">
-      <div class="card">
-        Total Incidents<br>
-        <span class="stat-value" id="total">0</span>
+      <!-- Development Demo Credentials Box -->
+      <div id="demo-credentials-box" class="demo-notice" style="display: none;" title="Click to autofill credentials">
+        <div class="demo-notice-header">
+          <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          <strong>Development Mode Credentials</strong>
+        </div>
+        <div class="demo-creds-row">
+          <span>Username: <strong id="demo-user-val" class="highlight-cyan">admin</strong></span>
+          <span>Password: <strong id="demo-pass-val" class="highlight-cyan">••••••••</strong></span>
+        </div>
+        <small class="demo-hint">Click anywhere in this box to autofill</small>
       </div>
-      <div class="card">
-        Active Threats<br>
-        <span class="stat-value" id="active" style="color:var(--warn)">0</span>
-      </div>
-      <div class="card">
-        High Severity<br>
-        <span class="stat-value" id="high" style="color:var(--danger)">0</span>
-      </div>
-      <div class="card">
-        Security Health Score<br>
-        <span class="stat-value" id="health" style="color:var(--safe)">100</span>
-      </div>
-    </div>
 
-    <!-- SIMULATION CONTROLS -->
-    <div class="card" style="margin-top:20px">
-      <h3>
-        <span>Threat Simulation Vector Engine</span>
-        <span style="font-size:.75rem;color:var(--muted);font-weight:normal">Controlled Demo Telemetry</span>
-      </h3>
-      <div class="sim-controls">
-        <button onclick="simulateAttack('Brute Force Credential Spray', 85, 'high_velocity_login')">
-          ⚡ Simulate Brute Force (High Risk 85)
+      <!-- Login Form -->
+      <form id="login-form" class="form-stacked">
+        <div class="form-group">
+          <label for="login-username" class="form-label">Username</label>
+          <input id="login-username" type="text" class="form-input" placeholder="e.g. admin" autocomplete="username" required>
+        </div>
+
+        <div class="form-group">
+          <label for="login-password" class="form-label">Password</label>
+          <input id="login-password" type="password" class="form-input" placeholder="••••••••" autocomplete="current-password" required>
+        </div>
+
+        <button id="login-submit-btn" type="submit" class="btn btn-primary btn-block">
+          Authenticate Session
         </button>
-        <button onclick="simulateAttack('Credential Stuffing Bot', 65, 'automated_stuffing')">
-          🤖 Simulate Bot Stuffing (Med Risk 65)
-        </button>
-        <button onclick="simulateAttack('Suspicious Geolocation Anomaly', 35, 'anomalous_travel')">
-          🌐 Simulate Geo Anomaly (Low Risk 35)
-        </button>
+
+        <p id="login-error-msg" class="form-error" role="alert"></p>
+      </form>
+
+      <div class="login-footer">
+        <span>Protected by server-verified session encryption (HttpOnly, SameSite) & IP rate throttling.</span>
       </div>
     </div>
-
-    <!-- THREAT TIMELINE -->
-    <div class="card" style="margin-top:20px">
-      <h3>
-        <span>Incident Severity Timeline</span>
-        <button onclick="replayTimeline()" class="btn-secondary" style="width:auto;padding:5px 12px;margin:0;font-size:.8rem">Replay Events</button>
-      </h3>
-      <div style="height:220px;position:relative">
-        <canvas id="timeline"></canvas>
-      </div>
-    </div>
-
-    <!-- ATTACK MAP -->
-    <div class="card" style="margin-top:20px">
-      <h3>
-        <span>Global Telemetry Vectors</span>
-        <span style="font-size:.75rem;color:var(--muted);font-weight:normal">Simulated Geographic Coordinates</span>
-      </h3>
-      <div id="map">
-        <img src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg" alt="World Map">
-        <div class="map-disclaimer">Simulated Map Markers • Not Live Geospatial Threat Feeds</div>
-      </div>
-    </div>
-
-    <!-- INCIDENT TABLE -->
-    <div class="card" style="margin-top:20px">
-      <h3>
-        <span>Security Incident Feed & Resolution</span>
-        <button onclick="loadIncidents()" class="btn-secondary" style="width:auto;padding:5px 12px;margin:0;font-size:.8rem">Refresh Logs</button>
-      </h3>
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Type</th>
-            <th>Target User</th>
-            <th>Attack Vector</th>
-            <th>Location / Source</th>
-            <th>Risk Score</th>
-            <th>Telemetry</th>
-            <th>Status</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody id="logs"></tbody>
-      </table>
-    </div>
-
   </div>
-</div>
 
-<script>
-// Base API configuration (supports same-origin or explicit backend origin)
-const API_BASE = window.AUTHGUARD_API_URL || "";
 
-let chart = null;
-let fullTimelineData = [];
-let cachedDemoCreds = null;
+  <!-- =========================================================================
+       2. SOC WORKSPACE (APP SHELL)
+       ========================================================================= -->
+  <div id="app-shell" style="display: none;">
 
-// Safe HTML text escaping helper to prevent XSS
-function escapeHTML(str) {
-  if (str === null || str === undefined) return "";
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
+    <!-- Responsive Sidebar Navigation -->
+    <aside id="sidebar">
+      <div class="sidebar-logo">
+        <svg class="brand-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <span class="logo-text">AUTHGUARD-X</span>
+      </div>
 
-// -----------------------------------------------------------------------------
-// SESSION LIFECYCLE & AUTHENTICATION
-// -----------------------------------------------------------------------------
-async function checkSession() {
-  const statusEl = document.getElementById("authStatusText");
-  try {
-    const res = await fetch(`${API_BASE}/api/auth/session`, { credentials: "include" });
-    if (!res.ok) throw new Error("Status check failed");
-    const data = await res.json();
+      <nav class="sidebar-nav">
+        <a href="#overview" class="nav-link active" data-view="overview">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          <span class="nav-label">Overview</span>
+        </a>
 
-    document.getElementById("envBadge").textContent = (data.environment || "ENV").toUpperCase();
+        <a href="#incidents" class="nav-link" data-view="incidents">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+            <polyline points="10 9 9 9 8 9"/>
+          </svg>
+          <span class="nav-label">Incidents</span>
+        </a>
 
-    if (data.authenticated && data.user) {
-      statusEl.textContent = `Active Session: ${data.user.username}`;
-      showDashboard(data.user);
-    } else {
-      statusEl.textContent = "Unauthenticated";
-      showLogin(data);
+        <a href="#simulations" class="nav-link" data-view="simulations">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          <span class="nav-label">Simulations</span>
+        </a>
+
+        <a href="#threat-map" class="nav-link" data-view="threat-map">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+          </svg>
+          <span class="nav-label">Threat Map</span>
+        </a>
+      </nav>
+
+      <!-- Sidebar Footer User Profile -->
+      <div class="sidebar-footer">
+        <div class="user-profile">
+          <div class="user-avatar">
+            <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <div class="user-details">
+            <span class="user-display-name">Analyst</span>
+            <span class="user-role-badge">ADMIN</span>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm logout-trigger" title="End Session">
+          <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Content Area -->
+    <main id="main-content">
+
+      <!-- Topbar Header -->
+      <header id="topbar">
+        <div class="topbar-left">
+          <button id="mobile-sidebar-toggle" class="btn btn-ghost btn-icon-only mobile-only" aria-label="Toggle navigation menu">
+            <svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+          <h2 id="page-title" class="topbar-title">SOC Overview</h2>
+          <span id="env-badge" class="badge badge-telemetry">DEV</span>
+        </div>
+
+        <div class="topbar-right">
+          <button id="refresh-incidents-btn" class="btn btn-secondary btn-sm" title="Refresh Telemetry">
+            <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+            <span>Refresh</span>
+          </button>
+
+          <button id="sidebar-toggle" class="btn btn-ghost btn-icon-only desktop-only" title="Collapse / Expand Sidebar">
+            <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Simulation Transparency Disclaimer -->
+      <div class="simulation-banner">
+        <div class="banner-icon">
+          <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </div>
+        <div class="banner-text">
+          <strong>Demonstration & Training Platform:</strong>
+          <span>Incident vectors, attack graphs, and geospatial markers are simulated telemetry for analyst training.</span>
+        </div>
+      </div>
+
+      <!-- View Container -->
+      <div class="content-container">
+
+        <!-- ===================================================================
+             VIEW: OVERVIEW (DEFAULT)
+             =================================================================== -->
+        <section id="view-overview" class="view-panel active">
+          
+          <!-- KPI Metrics Row -->
+          <div class="kpi-grid">
+            <div class="card metric-card">
+              <div class="metric-header">
+                <span class="metric-label">Total Incidents</span>
+                <span class="metric-sublabel">Stored events</span>
+              </div>
+              <div id="metric-total" class="metric-value">0</div>
+              <div class="metric-footer text-muted">
+                <span>Simulated: <b id="metric-sim-count">0</b></span>
+                <span class="separator">•</span>
+                <span>System / Audit: <b id="metric-tele-count">0</b></span>
+              </div>
+            </div>
+
+            <div class="card metric-card">
+              <div class="metric-header">
+                <span class="metric-label">Active Threats</span>
+                <span class="metric-sublabel">Awaiting remediation</span>
+              </div>
+              <div id="metric-open" class="metric-value highlight-warning">0</div>
+              <div class="metric-footer text-muted">Requires analyst triage</div>
+            </div>
+
+            <div class="card metric-card">
+              <div class="metric-header">
+                <span class="metric-label">Critical Severity</span>
+                <span class="metric-sublabel">Risk &ge; 80</span>
+              </div>
+              <div id="metric-critical" class="metric-value highlight-danger">0</div>
+              <div class="metric-footer text-muted">Immediate action required</div>
+            </div>
+
+            <div class="card metric-card">
+              <div class="metric-header">
+                <span class="metric-label">Health Score</span>
+                <span class="metric-sublabel">System posture</span>
+              </div>
+              <div id="metric-health" class="metric-value">100</div>
+              <div class="metric-footer text-muted">Computed from unresolved risks</div>
+            </div>
+          </div>
+
+          <!-- Severity Breakdown & Threat Simulation Row -->
+          <div class="grid-2-col" style="margin-top: var(--space-4);">
+            
+            <!-- Severity Distribution Card -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Risk Severity Breakdown</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Active posture</span>
+              </div>
+              <div class="severity-bars">
+                <div class="sev-bar-item">
+                  <div class="sev-bar-meta">
+                    <span class="badge badge-critical">Critical (&ge;80)</span>
+                    <strong id="lbl-crit-count">0</strong>
+                  </div>
+                  <div class="progress-track"><div id="bar-crit" class="progress-fill fill-critical" style="width: 0%;"></div></div>
+                </div>
+
+                <div class="sev-bar-item">
+                  <div class="sev-bar-meta">
+                    <span class="badge badge-high">High (60–79)</span>
+                    <strong id="lbl-high-count">0</strong>
+                  </div>
+                  <div class="progress-track"><div id="bar-high" class="progress-fill fill-high" style="width: 0%;"></div></div>
+                </div>
+
+                <div class="sev-bar-item">
+                  <div class="sev-bar-meta">
+                    <span class="badge badge-medium">Medium (40–59)</span>
+                    <strong id="lbl-med-count">0</strong>
+                  </div>
+                  <div class="progress-track"><div id="bar-med" class="progress-fill fill-medium" style="width: 0%;"></div></div>
+                </div>
+
+                <div class="sev-bar-item">
+                  <div class="sev-bar-meta">
+                    <span class="badge badge-low">Low (&lt;40)</span>
+                    <strong id="lbl-low-count">0</strong>
+                  </div>
+                  <div class="progress-track"><div id="bar-low" class="progress-fill fill-low" style="width: 0%;"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Threat Simulation Engine Card -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Threat Simulation Engine</h3>
+                <span class="badge badge-simulated">Synthetic Incidents</span>
+              </div>
+              <p class="text-muted" style="font-size: var(--text-sm); margin-bottom: var(--space-3);">
+                Generate synthetic incident records with server-enforced provenance to evaluate SOC triage workflows and severity metrics.
+              </p>
+              <div class="sim-actions-grid">
+                <button class="btn btn-secondary btn-block" data-simulate data-attack="Brute Force Credential Spray" data-risk="85" data-behavior="high_velocity_login">
+                  <span>Simulate Brute Force</span>
+                  <span class="badge badge-critical">Risk 85</span>
+                </button>
+
+                <button class="btn btn-secondary btn-block" data-simulate data-attack="Credential Stuffing Bot" data-risk="65" data-behavior="automated_stuffing">
+                  <span>Simulate Bot Stuffing</span>
+                  <span class="badge badge-high">Risk 65</span>
+                </button>
+
+                <button class="btn btn-secondary btn-block" data-simulate data-attack="Anomalous Geolocation Travel" data-risk="35" data-behavior="geographic_velocity">
+                  <span>Simulate Geo Anomaly</span>
+                  <span class="badge badge-low">Risk 35</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Timeline Graph Card -->
+          <div class="card" style="margin-top: var(--space-4);">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">Incident Severity Timeline</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Telemetry risk fluctuations over chronological events</span>
+              </div>
+              <button id="replay-timeline-btn" class="btn btn-ghost btn-sm">
+                <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+                <span>Replay Stream</span>
+              </button>
+            </div>
+            <div class="chart-container" style="height: 220px; position: relative;">
+              <canvas id="timeline-chart"></canvas>
+            </div>
+          </div>
+        </section>
+
+
+        <!-- ===================================================================
+             VIEW: INCIDENTS TABLE
+             =================================================================== -->
+        <section id="view-incidents" class="view-panel">
+          <div class="card">
+            
+            <!-- Table Toolbar (Search & Filter Controls) -->
+            <div class="table-toolbar">
+              <div class="toolbar-search">
+                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <input id="incidents-search-input" type="search" class="form-input search-input" placeholder="Search by user, attack vector, or behavior...">
+              </div>
+
+              <div class="toolbar-filters">
+                <select id="filter-severity" class="form-select" aria-label="Filter by severity">
+                  <option value="all">All Severities</option>
+                  <option value="critical">Critical (&ge;80)</option>
+                  <option value="high">High (60–79)</option>
+                  <option value="medium">Medium (40–59)</option>
+                  <option value="low">Low (&lt;40)</option>
+                </select>
+
+                <select id="filter-status" class="form-select" aria-label="Filter by status">
+                  <option value="all">All Statuses</option>
+                  <option value="open">Open Threats</option>
+                  <option value="resolved">Resolved</option>
+                </select>
+
+                <select id="filter-source" class="form-select" aria-label="Filter by source">
+                  <option value="all">All Sources</option>
+                  <option value="simulated">Simulated Events</option>
+                  <option value="telemetry">System / Audit Events</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Incidents Table -->
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th data-sort="id" class="sortable">ID <span class="sort-indicator"></span></th>
+                    <th>Provenance</th>
+                    <th data-sort="username" class="sortable">Target User <span class="sort-indicator"></span></th>
+                    <th data-sort="attack" class="sortable">Attack Vector <span class="sort-indicator"></span></th>
+                    <th>Location</th>
+                    <th data-sort="risk" class="sortable">Risk Score <span class="sort-indicator"></span></th>
+                    <th>Status</th>
+                    <th data-sort="time" class="sortable">Timestamp <span class="sort-indicator"></span></th>
+                    <th style="text-align: right;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="incidents-tbody">
+                  <!-- Injected via incidents.js -->
+                </tbody>
+              </table>
+
+              <!-- Loading & Empty States -->
+              <div id="incidents-loading" class="state-message" style="display: none;">
+                <div class="spinner"></div>
+                <span>Querying incident database...</span>
+              </div>
+
+              <div id="incidents-empty" class="state-message" style="display: none;">
+                <svg class="empty-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>
+                </svg>
+                <strong style="color: var(--color-text-primary);">No matching incidents found</strong>
+                <span class="text-muted">Try adjusting your search keywords or filter settings.</span>
+              </div>
+            </div>
+
+            <!-- Table Pagination Bar -->
+            <div class="table-pagination">
+              <span id="pagination-info" class="text-muted" style="font-size: var(--text-sm);">Page 1 of 1</span>
+              <div class="pagination-buttons">
+                <button id="prev-page-btn" class="btn btn-secondary btn-sm" disabled>Previous</button>
+                <button id="next-page-btn" class="btn btn-secondary btn-sm" disabled>Next</button>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+
+        <!-- ===================================================================
+             VIEW: SIMULATIONS (CYBER ATTACK SIMULATION LAB)
+             =================================================================== -->
+        <section id="view-simulations" class="view-panel">
+          
+          <!-- Simulation Header Card -->
+          <div class="card" style="margin-bottom: var(--space-4);">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">Cyber Attack Simulation Lab</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Synthetic incident record generator for SOC analyst training and triage exercises</span>
+              </div>
+              <span class="badge badge-simulated">Synthetic Telemetry Generator</span>
+            </div>
+            <p class="text-muted" style="font-size: var(--text-sm); line-height: var(--leading-relaxed);">
+              Simulate attack scenarios to populate the incident database with training telemetry. 
+              All simulation records are flagged with server-enforced provenance (<code>is_simulated = 1</code>) to distinguish synthetic exercise events from system audit logs.
+            </p>
+          </div>
+
+          <!-- Simulation Scenarios Grid -->
+          <div class="grid-2-col" style="gap: var(--space-4); margin-bottom: var(--space-4);">
+            
+            <!-- Pre-configured Attack Vectors -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Adversary Scenario Library</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">One-click execution</span>
+              </div>
+              <div class="sim-vector-list" style="display: flex; flex-direction: column; gap: var(--space-3);">
+                
+                <div class="card" style="background: var(--color-surface); padding: var(--space-3); border: 1px solid var(--color-border);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
+                    <div>
+                      <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Brute Force Credential Spray</strong>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Scenario: High-velocity authentication attempts against admin accounts.</div>
+                    </div>
+                    <span class="badge badge-critical">Critical (85)</span>
+                  </div>
+                  <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
+                    Generates rapid authentication attempt logs using common passwords against administrative accounts.
+                  </p>
+                  <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Brute Force Credential Spray" data-risk="85" data-behavior="high_velocity_login">
+                    Simulate Incident Scenario
+                  </button>
+                </div>
+
+                <div class="card" style="background: var(--color-surface); padding: var(--space-3); border: 1px solid var(--color-border);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
+                    <div>
+                      <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Credential Stuffing Botnet</strong>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Scenario: Automated bot traffic cycling credentials leaked from external breaches.</div>
+                    </div>
+                    <span class="badge badge-high">High (65)</span>
+                  </div>
+                  <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
+                    Generates automated bot traffic records cycling credentials against application users.
+                  </p>
+                  <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Credential Stuffing Bot" data-risk="65" data-behavior="automated_stuffing">
+                    Simulate Incident Scenario
+                  </button>
+                </div>
+
+                <div class="card" style="background: var(--color-surface); padding: var(--space-3); border: 1px solid var(--color-border);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
+                    <div>
+                      <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Anomalous Geolocation Velocity</strong>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Scenario: Consecutive logins from distant geographical locations within a brief timeframe.</div>
+                    </div>
+                    <span class="badge badge-low">Low (35)</span>
+                  </div>
+                  <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
+                    Generates session records from distant geographical locations within an impossible travel timeframe.
+                  </p>
+                  <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Anomalous Geolocation Travel" data-risk="35" data-behavior="geographic_velocity">
+                    Simulate Incident Scenario
+                  </button>
+                </div>
+
+                <div class="card" style="background: var(--color-surface); padding: var(--space-3); border: 1px solid var(--color-border);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
+                    <div>
+                      <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">SQL Injection Exploit Probe</strong>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Scenario: Query parameter containing SQL injection pattern strings.</div>
+                    </div>
+                    <span class="badge badge-critical">Critical (90)</span>
+                  </div>
+                  <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
+                    Generates database probe event records with SQL syntax strings to test input handling and triage runbooks.
+                  </p>
+                  <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="SQL Injection Exploit Probe" data-risk="90" data-behavior="sqli_probe">
+                    Simulate Incident Scenario
+                  </button>
+                </div>
+
+              </div>
+            </div>
+
+            <!-- Custom Vector Formulation -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Custom Adversary Scenario</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Parameter customization</span>
+              </div>
+              <p class="text-muted" style="font-size: var(--text-sm); margin-bottom: var(--space-4);">
+                Configure custom parameters to generate synthetic incident records with specific risk scores, attack vectors, and origin labels.
+              </p>
+              
+              <form id="custom-simulation-form" class="form-stacked">
+                <div class="form-group">
+                  <label for="custom-sim-attack" class="form-label">Attack Vector Title</label>
+                  <input id="custom-sim-attack" type="text" class="form-input" placeholder="e.g. Session Hijack via Stolen Cookie" value="Privilege Escalation Probe">
+                </div>
+
+                <div class="form-group">
+                  <label for="custom-sim-risk" class="form-label">Risk Severity (0–100)</label>
+                  <input id="custom-sim-risk" type="number" class="form-input" min="0" max="100" value="75">
+                  <small class="text-muted" style="font-size: var(--text-xs);">Scores &ge; 80 trigger Critical alerts and lower system health.</small>
+                </div>
+
+                <div class="form-group">
+                  <label for="custom-sim-behavior" class="form-label">Behavior Profile</label>
+                  <select id="custom-sim-behavior" class="form-select">
+                    <option value="privilege_escalation">Privilege Escalation Attempt</option>
+                    <option value="lateral_traversal">Lateral Network Traversal</option>
+                    <option value="api_rate_exhaustion">API Rate Limiter Flooding</option>
+                    <option value="session_anomaly">Session Token Manipulation</option>
+                    <option value="data_exfiltration">Simulated Bulk Data Exfiltration</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="custom-sim-city" class="form-label">Simulated Origin City</label>
+                  <select id="custom-sim-city" class="form-select">
+                    <option value="Zurich, Switzerland">Zurich, Switzerland</option>
+                    <option value="Seoul, South Korea">Seoul, South Korea</option>
+                    <option value="Frankfurt, Germany">Frankfurt, Germany</option>
+                    <option value="Toronto, Canada">Toronto, Canada</option>
+                    <option value="Sydney, Australia">Sydney, Australia</option>
+                  </select>
+                </div>
+
+                <button id="custom-sim-submit-btn" type="button" class="btn btn-primary btn-block" style="margin-top: var(--space-3);">
+                  Generate Custom Incident Record
+                </button>
+              </form>
+            </div>
+
+          </div>
+        </section>
+
+
+        <!-- ===================================================================
+             VIEW: THREAT MAP
+             =================================================================== -->
+        <section id="view-threat-map" class="view-panel">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">Global Threat Origin Vectors</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Simulated geospatial threat origin mapping</span>
+              </div>
+              <span class="badge badge-simulated">Simulated Data Only</span>
+            </div>
+
+            <div id="attack-map-canvas" class="attack-map-wrapper">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg" alt="World Map Vector" class="world-map-svg">
+              <div class="map-disclaimer-pill">Simulated Coordinate Projections • No External Geotracking</div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+
+  <!-- =========================================================================
+       3. MODALS & DIALOGS
+       ========================================================================= -->
+
+  <!-- Incident Details Modal -->
+  <div id="incident-modal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Incident Details <span class="detail-id highlight-cyan">#—</span></h3>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="detail-grid">
+          <div class="detail-item">
+            <span class="detail-label">Attack Vector</span>
+            <strong class="detail-attack text-primary">—</strong>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Target Account</span>
+            <strong class="detail-username text-primary">—</strong>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Severity Score</span>
+            <div class="detail-risk">—</div>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Current Status</span>
+            <div class="detail-status">—</div>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Incident Provenance</span>
+            <div class="detail-source">—</div>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Client IP Address</span>
+            <span class="detail-ip font-mono">—</span>
+          </div>
+          <div class="detail-item full-width">
+            <span class="detail-label">Geographic Location</span>
+            <span class="detail-location text-muted">—</span>
+          </div>
+          <div class="detail-item full-width">
+            <span class="detail-label">Timestamp</span>
+            <span class="detail-time text-muted">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button class="btn btn-primary modal-resolve-btn">Resolve Incident</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation Dialog -->
+  <div id="confirm-modal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3 class="confirm-title modal-title">Confirm Action</h3>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="confirm-message text-muted">Are you sure you want to proceed?</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary cancel-btn" data-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary confirm-btn">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Non-intrusive Toast Container -->
+  <div id="toast-container" class="toast-shelf" aria-live="polite"></div>
+
+
+  <!-- =========================================================================
+       4. SCRIPT MODULE INVOCATION
+       ========================================================================= -->
+  <script src="js/ui.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script src="js/incidents.js"></script>
+
+  <script>
+    // ── Single Page View Router ──────────────────────────────────────
+    function switchView(viewName) {
+      document.querySelectorAll('.view-panel').forEach(panel => {
+        panel.classList.remove('active');
+      });
+      document.querySelectorAll('.sidebar-nav .nav-link').forEach(link => {
+        link.classList.remove('active');
+      });
+
+      const targetPanel = document.getElementById(`view-${viewName}`) || document.getElementById('view-overview');
+      if (targetPanel) targetPanel.classList.add('active');
+
+      const activeLink = document.querySelector(`.sidebar-nav .nav-link[data-view="${viewName}"]`);
+      if (activeLink) activeLink.classList.add('active');
+
+      const titleEl = document.getElementById('page-title');
+      const titles = {
+        'overview': 'SOC Overview',
+        'incidents': 'Security Incident Feed',
+        'simulations': 'Attack Simulation Engine',
+        'threat-map': 'Global Telemetry Vectors'
+      };
+      if (titleEl) titleEl.textContent = titles[viewName] || 'SOC Workspace';
     }
-  } catch (err) {
-    statusEl.textContent = "Backend Connection Offline";
-    console.error("Auth check failed:", err);
-  }
-}
 
-function showLogin(authData) {
-  document.getElementById("loginBox").style.display = "block";
-  document.getElementById("dash").style.display = "none";
-
-  const demoBox = document.getElementById("demoBox");
-  if (authData && authData.demo_credentials) {
-    cachedDemoCreds = authData.demo_credentials;
-    document.getElementById("demoUserLabel").textContent = authData.demo_credentials.username;
-    document.getElementById("demoPassLabel").textContent = authData.demo_credentials.password;
-    demoBox.style.display = "block";
-  } else {
-    demoBox.style.display = "none";
-  }
-}
-
-function showDashboard(user) {
-  document.getElementById("loginBox").style.display = "none";
-  document.getElementById("dash").style.display = "block";
-  document.getElementById("sessionUserDisplay").textContent = user.username || "Analyst";
-  document.getElementById("sessionRoleBadge").textContent = (user.role || "analyst").toUpperCase();
-  loadIncidents();
-}
-
-function fillDemo() {
-  if (cachedDemoCreds) {
-    document.getElementById("user").value = cachedDemoCreds.username;
-    document.getElementById("pass").value = cachedDemoCreds.password;
-  }
-}
-
-async function login() {
-  const userVal = document.getElementById("user").value.trim();
-  const passVal = document.getElementById("pass").value;
-  const msgEl = document.getElementById("msg");
-  const loginBtn = document.getElementById("loginBtn");
-
-  msgEl.textContent = "";
-
-  if (!userVal || !passVal) {
-    msgEl.textContent = "Please provide username and password.";
-    return;
-  }
-
-  loginBtn.disabled = true;
-  loginBtn.textContent = "Verifying...";
-
-  try {
-    const res = await fetch(`${API_BASE}/api/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ username: userVal, password: passVal })
+    // Hash navigation listener
+    window.addEventListener('hashchange', () => {
+      const hash = window.location.hash.replace('#', '') || 'overview';
+      switchView(hash);
     });
 
-    const data = await res.json();
-    if (res.status === 200 && data.status === "success") {
-      msgEl.textContent = "";
-      document.getElementById("pass").value = "";
-      checkSession();
-    } else if (res.status === 429) {
-      msgEl.textContent = "Rate limit reached. Please wait before retrying.";
-    } else {
-      msgEl.textContent = data.error || "Authentication failed.";
-    }
-  } catch (err) {
-    msgEl.textContent = "Connection error. Is backend server active?";
-  } finally {
-    loginBtn.disabled = false;
-    loginBtn.textContent = "Authenticate Session";
-  }
-}
-
-async function logout() {
-  try {
-    await fetch(`${API_BASE}/api/auth/logout`, {
-      method: "POST",
-      credentials: "include"
-    });
-  } catch (err) {
-    console.error("Logout request error:", err);
-  }
-  checkSession();
-}
-
-// -----------------------------------------------------------------------------
-// INCIDENT RETRIEVAL & SAFE RENDERING (XSS-FREE)
-// -----------------------------------------------------------------------------
-async function loadIncidents() {
-  try {
-    const res = await fetch(`${API_BASE}/api/incidents`, { credentials: "include" });
-    if (res.status === 401) {
-      checkSession();
-      return;
-    }
-    const data = await res.json();
-    renderIncidentTable(data);
-  } catch (err) {
-    console.error("Failed to load incidents:", err);
-  }
-}
-
-function renderIncidentTable(incidents) {
-  const tbody = document.getElementById("logs");
-  tbody.innerHTML = "";
-
-  let healthScore = 100;
-  let highCount = 0;
-  let activeThreats = 0;
-  const timelineScores = [];
-
-  if (!Array.isArray(incidents) || incidents.length === 0) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="9" style="color:var(--muted);padding:24px">No security incidents logged.</td>`;
-    tbody.appendChild(tr);
-    updateMetrics(0, 0, 0, 100);
-    drawTimeline([]);
-    return;
-  }
-
-  incidents.forEach(item => {
-    const tr = document.createElement("tr");
-
-    // Severity styling
-    let riskClass = "low";
-    let statusBadge = `<span class="badge badge-trusted">LOW</span>`;
-    if (item.risk >= 70) {
-      riskClass = "high";
-      statusBadge = `<span class="badge badge-risky">CRITICAL</span>`;
-      highCount++;
-    } else if (item.risk >= 40) {
-      riskClass = "mid";
-      statusBadge = `<span class="badge badge-monitored">MEDIUM</span>`;
-    }
-
-    if (!item.resolved) {
-      activeThreats++;
-      healthScore -= (item.risk >= 70 ? 8 : (item.risk >= 40 ? 4 : 1));
-    }
-
-    timelineScores.push(item.risk);
-
-    const isResolved = Boolean(item.resolved);
-    const isSimulated = Boolean(item.is_simulated);
-
-    // Build row safely using escaped text to eliminate XSS
-    const idEscaped = escapeHTML(item.id);
-    const userEscaped = escapeHTML(item.username);
-    const attackEscaped = escapeHTML(item.attack);
-    const locationEscaped = escapeHTML(item.location || "Internal");
-    const riskEscaped = escapeHTML(item.risk);
-
-    const typeBadge = isSimulated
-      ? `<span class="badge badge-sim">SIMULATED</span>`
-      : `<span class="badge badge-monitored">TELEMETRY</span>`;
-
-    const resolutionStatus = isResolved
-      ? `<span class="badge badge-resolved">RESOLVED</span>`
-      : `<span class="badge badge-risky">OPEN</span>`;
-
-    const actionCell = isResolved
-      ? `<span style="color:var(--muted);font-size:.8rem">Closed</span>`
-      : `<button class="btn-resolve" onclick="resolveIncident(${item.id})">Resolve</button>`;
-
-    tr.innerHTML = `
-      <td>#${idEscaped}</td>
-      <td>${typeBadge}</td>
-      <td><b>${userEscaped}</b></td>
-      <td>${attackEscaped}</td>
-      <td><span style="font-size:.78rem;color:var(--muted)">${locationEscaped}</span></td>
-      <td class="${riskClass}">${riskEscaped}</td>
-      <td>${statusBadge}</td>
-      <td>${resolutionStatus}</td>
-      <td>${actionCell}</td>
-    `;
-
-    tbody.appendChild(tr);
-  });
-
-  const finalHealth = Math.max(0, healthScore);
-  updateMetrics(incidents.length, activeThreats, highCount, finalHealth);
-  drawTimeline(timelineScores.reverse());
-}
-
-function updateMetrics(total, active, high, health) {
-  document.getElementById("total").textContent = total;
-  document.getElementById("active").textContent = active;
-  document.getElementById("high").textContent = high;
-  document.getElementById("health").textContent = health;
-}
-
-// -----------------------------------------------------------------------------
-// INCIDENT RESOLUTION
-// -----------------------------------------------------------------------------
-async function resolveIncident(incidentId) {
-  try {
-    const res = await fetch(`${API_BASE}/api/incidents/${incidentId}/resolve`, {
-      method: "POST",
-      credentials: "include"
-    });
-    if (res.ok) {
-      loadIncidents();
-    } else {
-      const errData = await res.json();
-      alert(`Resolution failed: ${errData.message || "Unknown error"}`);
-    }
-  } catch (err) {
-    alert("Network error while resolving incident.");
-  }
-}
-
-// -----------------------------------------------------------------------------
-// ATTACK SIMULATION
-// -----------------------------------------------------------------------------
-const SIM_CITIES = [
-  "Frankfurt, Germany",
-  "Singapore",
-  "Tokyo, Japan",
-  "London, UK",
-  "Sao Paulo, Brazil",
-  "Sydney, Australia",
-  "San Jose, USA"
-];
-
-async function simulateAttack(attackName, riskScore, behaviorType) {
-  const randomCity = SIM_CITIES[Math.floor(Math.random() * SIM_CITIES.length)];
-
-  try {
-    const res = await fetch(`${API_BASE}/api/incidents/simulate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        attack: attackName,
-        risk: riskScore,
-        behavior: behaviorType,
-        username: "sim_agent",
-        is_simulated: true,
-        simulated_location: randomCity
-      })
-    });
-
-    if (res.ok) {
-      // Trigger visual simulated attack marker on map
-      const randX = Math.random() * 85 + 7;
-      const randY = Math.random() * 55 + 20;
-      addMapAttackMarker(randX, randY);
-      loadIncidents();
-    } else if (res.status === 401) {
-      checkSession();
-    } else {
-      const err = await res.json();
-      alert(`Simulation failed: ${err.message || "Error"}`);
-    }
-  } catch (err) {
-    console.error("Simulation request error:", err);
-  }
-}
-
-// -----------------------------------------------------------------------------
-// VISUAL MAP & TIMELINE
-// -----------------------------------------------------------------------------
-function addMapAttackMarker(xPercent, yPercent) {
-  const map = document.getElementById("map");
-  const dot = document.createElement("div");
-  dot.className = "attack-dot";
-  dot.style.left = `${xPercent}%`;
-  dot.style.top = `${yPercent}%`;
-  map.appendChild(dot);
-  setTimeout(() => dot.remove(), 2200);
-}
-
-function drawTimeline(dataPoints) {
-  fullTimelineData = [...dataPoints];
-  renderChart(dataPoints);
-}
-
-function renderChart(dataPoints) {
-  const ctx = document.getElementById("timeline");
-  if (!ctx) return;
-
-  if (chart) chart.destroy();
-
-  const labels = dataPoints.map((_, i) => `T-${dataPoints.length - i}`);
-  chart = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: labels,
-      datasets: [{
-        label: "Risk Score Telemetry",
-        data: dataPoints,
-        borderColor: "#ff4d4d",
-        backgroundColor: "rgba(255,77,77,0.15)",
-        fill: true,
-        tension: 0.35,
-        pointRadius: 4,
-        pointHoverRadius: 6
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: {
-          beginAtZero: true,
-          max: 100,
-          grid: { color: "rgba(255,255,255,0.06)" }
-        },
-        x: {
-          grid: { color: "rgba(255,255,255,0.06)" }
+    document.querySelectorAll('.sidebar-nav .nav-link').forEach(link => {
+      link.addEventListener('click', (e) => {
+        const view = link.dataset.view;
+        if (view) {
+          window.location.hash = view;
         }
-      },
-      plugins: {
-        legend: { display: false }
-      }
-    }
-  });
-}
+      });
+    });
 
-function replayTimeline() {
-  if (fullTimelineData.length === 0) return;
-  let idx = 0;
-  const temp = [];
-  const timer = setInterval(() => {
-    temp.push(fullTimelineData[idx]);
-    renderChart(temp);
-    idx++;
-    if (idx >= fullTimelineData.length) clearInterval(timer);
-  }, 300);
-}
+    // ── Application Initialization ────────────────────────────────────
+    window.addEventListener('DOMContentLoaded', () => {
+      window.UI.initModals();
+      window.UI.initSidebar();
+      window.Auth.init();
+      window.Dashboard.init();
+      window.Incidents.init();
 
-// -----------------------------------------------------------------------------
-// UI CONTROLS & INTERACTIVE EFFECTS
-// -----------------------------------------------------------------------------
-function toggleMode() {
-  document.body.classList.toggle("hacker");
-  const btn = document.getElementById("toggle");
-  if (document.body.classList.contains("hacker")) {
-    btn.textContent = "⚡ Terminal Mode";
-  } else {
-    btn.textContent = "🟢 Hacker Mode";
-  }
-}
-
-// Interactive glass cursor spotlight effect
-document.querySelectorAll(".card").forEach(card => {
-  card.addEventListener("mousemove", e => {
-    const r = card.getBoundingClientRect();
-    card.style.setProperty("--x", `${e.clientX - r.left}px`);
-    card.style.setProperty("--y", `${e.clientY - r.top}px`);
-  });
-});
-
-// Allow Enter key to trigger login
-document.getElementById("pass").addEventListener("keydown", e => {
-  if (e.key === "Enter") login();
-});
-document.getElementById("user").addEventListener("keydown", e => {
-  if (e.key === "Enter") document.getElementById("pass").focus();
-});
-
-// Initialize on page load
-window.addEventListener("DOMContentLoaded", () => {
-  checkSession();
-});
-</script>
+      const initialHash = window.location.hash.replace('#', '') || 'overview';
+      switchView(initialHash);
+    });
+  </script>
 
 </body>
 </html>

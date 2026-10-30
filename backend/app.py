@@ -1,5 +1,6 @@
 import os
 import sys
+import math
 import secrets
 import sqlite3
 import ipaddress
@@ -11,6 +12,7 @@ from flask import Flask, request, jsonify, session, send_from_directory
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect, generate_csrf
 import bcrypt
 from dotenv import load_dotenv
 
@@ -140,6 +142,140 @@ def resolve_ip_location(ip_str: str, enable_external_geoip: bool = False) -> str
     return "External Location"
 
 
+# ---------------------------------------------------------------------------
+# Allowlisted sort columns for /api/incidents to prevent SQL injection
+# ---------------------------------------------------------------------------
+_INCIDENTS_SORT_ALLOWLIST = {"id", "risk", "time", "username", "attack"}
+
+
+def _build_incidents_query(
+    search=None,
+    severity=None,
+    status="all",
+    source="all",
+    sort_by="id",
+    sort_dir="desc",
+    page=None,
+    per_page=25,
+    date_from=None,
+    date_to=None,
+):
+    """
+    Constructs a parameterized SQL query for the incidents/logs table.
+
+    All user-supplied filter values are bound via parameters (never interpolated).
+    The sort column is validated against an explicit allowlist before insertion.
+
+    Returns (count_sql, data_sql, params, limit, offset) where limit/offset are
+    None when pagination is not requested (page=None).
+    """
+    conditions = []
+    params = []
+
+    # --- Search filter (ID exact/substring & text LIKE, parameterized) ---
+    if search:
+        raw_search = str(search).strip()
+        term = f"%{raw_search}%"
+        stripped_id = raw_search.lstrip("#").strip()
+        if stripped_id.isdigit():
+            # Exact numeric ID or substring match, plus text fields
+            exact_id = int(stripped_id)
+            conditions.append(
+                "(id = ? OR CAST(id AS TEXT) LIKE ? OR username LIKE ? OR attack LIKE ? OR behavior LIKE ?)"
+            )
+            params.extend([exact_id, f"%{stripped_id}%", term, term, term])
+        else:
+            conditions.append(
+                "(CAST(id AS TEXT) LIKE ? OR username LIKE ? OR attack LIKE ? OR behavior LIKE ?)"
+            )
+            params.extend([term, term, term, term])
+
+    # --- Severity filter (maps to risk score ranges) ---
+    if severity:
+        severity = severity.lower()
+        if severity == "critical":
+            conditions.append("risk >= ?")
+            params.append(80)
+        elif severity == "high":
+            conditions.append("risk >= ? AND risk < ?")
+            params.extend([60, 80])
+        elif severity == "medium":
+            conditions.append("risk >= ? AND risk < ?")
+            params.extend([40, 60])
+        elif severity == "low":
+            conditions.append("risk < ?")
+            params.append(40)
+
+    # --- Status filter ---
+    if status and status != "all":
+        if status == "open":
+            conditions.append("resolved = ?")
+            params.append(0)
+        elif status == "resolved":
+            conditions.append("resolved = ?")
+            params.append(1)
+
+    # --- Source filter ---
+    if source and source != "all":
+        if source == "simulated":
+            conditions.append("is_simulated = ?")
+            params.append(1)
+        elif source == "telemetry":
+            conditions.append("is_simulated = ?")
+            params.append(0)
+
+    # --- Date range filter ---
+    if date_from:
+        try:
+            datetime.strptime(date_from, "%Y-%m-%d")
+            conditions.append("time >= ?")
+            params.append(f"{date_from} 00:00:00")
+        except ValueError:
+            pass  # Ignore malformed dates silently
+
+    if date_to:
+        try:
+            datetime.strptime(date_to, "%Y-%m-%d")
+            conditions.append("time <= ?")
+            params.append(f"{date_to} 23:59:59")
+        except ValueError:
+            pass
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    # --- Sort column allowlist enforcement (prevents ORDER BY injection) ---
+    if sort_by not in _INCIDENTS_SORT_ALLOWLIST:
+        sort_by = "id"
+    sort_dir = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
+
+    base_select = f"""
+        SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
+        FROM logs
+        {where_clause}
+        ORDER BY {sort_by} {sort_dir}
+    """
+
+    count_select = f"SELECT COUNT(*) AS total FROM logs {where_clause}"
+
+    return count_select, base_select, params
+
+
+def _row_to_dict(r):
+    """Converts a sqlite3.Row from the logs table to a plain dict."""
+    return {
+        "id": r["id"],
+        "username": r["username"],
+        "attack": r["attack"],
+        "behavior": r["behavior"],
+        "risk": r["risk"],
+        "ip": r["ip"],
+        "location": r["location"],
+        "time": r["time"],
+        "resolved": r["resolved"],
+        "is_simulated": bool(r["is_simulated"]),
+    }
+
+
 def create_app(test_config=None) -> Flask:
     app = Flask(__name__, static_folder="../frontend", static_url_path="")
 
@@ -175,11 +311,24 @@ def create_app(test_config=None) -> Flask:
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=(app_env == "production"),
-        PERMANENT_SESSION_LIFETIME=timedelta(hours=4)
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=4),
+        # CSRF is enabled by default; disabled in TESTING mode so existing
+        # tests (which do not supply CSRF tokens) continue to pass.
+        WTF_CSRF_ENABLED=True,
     )
 
     if test_config:
         app.config.update(test_config)
+
+    # Automatically disable CSRF when running under pytest / TESTING flag unless
+    # explicitly enabled in test_config (allowing CSRF integration tests).
+    if app.config.get("TESTING") and "WTF_CSRF_ENABLED" not in (test_config or {}):
+        app.config["WTF_CSRF_ENABLED"] = False
+
+    # Initialize CSRF protection (Flask-WTF)
+    # The frontend must send the token in the X-CSRFToken request header for
+    # all state-changing requests (POST / PUT / DELETE).
+    csrf = CSRFProtect(app)
 
     # Initialize CORS safely with credential support
     CORS(app, origins=cors_allowed, supports_credentials=True)
@@ -194,6 +343,7 @@ def create_app(test_config=None) -> Flask:
         default_limits=[],
         storage_uri="memory://"
     )
+    app.limiter = limiter
 
     # Initialize Database
     init_db(
@@ -342,39 +492,148 @@ def create_app(test_config=None) -> Flask:
 
         return jsonify(response_payload), 200
 
+    @app.route("/api/auth/csrf-token", methods=["GET"])
+    def csrf_token():
+        """
+        Returns a CSRF token for the calling client.
+
+        This endpoint is intentionally accessible to both authenticated and
+        unauthenticated clients so the login form can obtain a token before
+        the user has a session.  The token is generated via Flask-WTF and
+        is tied to the current session via a signed HMAC.
+        """
+        token = generate_csrf()
+        return jsonify({"csrf_token": token}), 200
+
     # ---------------------------------------------------------
     # Incident & Attack Log Endpoints
     # ---------------------------------------------------------
+
     @app.route("/api/incidents", methods=["GET"])
-    @app.route("/get_logs", methods=["GET"])
     @login_required
-    def get_logs():
+    def get_incidents():
+        """
+        Enhanced incident listing with search, filter, sort and pagination.
+
+        When no pagination parameters (page / per_page) are supplied the
+        endpoint preserves the original flat-array response shape so that
+        existing clients are not broken.  When pagination parameters are
+        present a paginated envelope is returned instead.
+        """
+        # --- Query parameter extraction ---
+        search = request.args.get("search", "").strip() or None
+        severity = request.args.get("severity", "").strip() or None
+        status = request.args.get("status", "all").strip()
+        source = request.args.get("source", "all").strip()
+        sort_by = request.args.get("sort_by", "id").strip()
+        sort_dir = request.args.get("sort_dir", "desc").strip()
+        date_from = request.args.get("date_from", "").strip() or None
+        date_to = request.args.get("date_to", "").strip() or None
+
+        # Determine whether the caller wants paginated output
+        page_raw = request.args.get("page")
+        per_page_raw = request.args.get("per_page")
+        paginated = page_raw is not None or per_page_raw is not None
+
+        try:
+            page = max(1, int(page_raw)) if page_raw else 1
+        except (ValueError, TypeError):
+            page = 1
+
+        try:
+            per_page = max(1, min(100, int(per_page_raw))) if per_page_raw else 25
+        except (ValueError, TypeError):
+            per_page = 25
+
+        count_sql, data_sql, params = _build_incidents_query(
+            search=search,
+            severity=severity,
+            status=status,
+            source=source,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page if paginated else None,
+            per_page=per_page,
+            date_from=date_from,
+            date_to=date_to,
+        )
+
         conn = get_db_connection(app.config["DATABASE_PATH"])
         c = conn.cursor()
-        c.execute("""
-            SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
-            FROM logs
-            ORDER BY id DESC
-        """)
+
+        # Total count (for pagination metadata)
+        c.execute(count_sql, params)
+        total = c.fetchone()[0]
+
+        if paginated:
+            offset = (page - 1) * per_page
+            paged_sql = data_sql + " LIMIT ? OFFSET ?"
+            c.execute(paged_sql, params + [per_page, offset])
+        else:
+            c.execute(data_sql, params)
+
         rows = c.fetchall()
         conn.close()
 
-        logs = []
-        for r in rows:
-            logs.append({
-                "id": r["id"],
-                "username": r["username"],
-                "attack": r["attack"],
-                "behavior": r["behavior"],
-                "risk": r["risk"],
-                "ip": r["ip"],
-                "location": r["location"],
-                "time": r["time"],
-                "resolved": r["resolved"],
-                "is_simulated": bool(r["is_simulated"])
-            })
+        incidents = [_row_to_dict(r) for r in rows]
 
-        return jsonify(logs), 200
+        if paginated:
+            total_pages = max(1, math.ceil(total / per_page))
+            return jsonify({
+                "incidents": incidents,
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total,
+                    "total_pages": total_pages,
+                    "has_next": page < total_pages,
+                    "has_prev": page > 1,
+                }
+            }), 200
+
+        # Backward-compatible flat-array response (no pagination params supplied)
+        return jsonify(incidents), 200
+
+    @app.route("/get_logs", methods=["GET"])
+    @login_required
+    def get_logs():
+        """
+        Legacy flat-array endpoint for backward compatibility.
+
+        Delegates to the same query builder with default parameters and always
+        returns a plain JSON array (no pagination envelope).
+        """
+        count_sql, data_sql, params = _build_incidents_query()
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute(data_sql, params)
+        rows = c.fetchall()
+        conn.close()
+
+        return jsonify([_row_to_dict(r) for r in rows]), 200
+
+    @app.route("/api/incidents/<int:id>", methods=["GET"])
+    @login_required
+    def get_incident_detail(id: int):
+        """Returns full detail for a single incident by primary key."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
+            FROM logs
+            WHERE id = ?
+            """,
+            (id,)
+        )
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
+
+        return jsonify(_row_to_dict(row)), 200
 
     @app.route("/api/incidents/simulate", methods=["POST"])
     @app.route("/log_attack", methods=["POST"])
@@ -382,8 +641,12 @@ def create_app(test_config=None) -> Flask:
     @limiter.limit(rate_limit_simulate)
     def log_attack():
         """
-        Logs an attack incident.
-        Explicitly flags whether the incident is simulated/demo data vs real telemetry.
+        Logs a simulated attack incident.
+
+        SECURITY: is_simulated is ALWAYS forced to 1 (True) regardless of
+        what the client sends.  This endpoint exists exclusively for simulation
+        / demo data and must never be used to ingest real telemetry.  The
+        client cannot override this flag.
         """
         data = request.get_json(silent=True)
         if not data or not isinstance(data, dict):
@@ -394,8 +657,12 @@ def create_app(test_config=None) -> Flask:
         risk = data.get("risk")
         behavior = data.get("behavior", "manual")
         username = data.get("username", session.get("username", "simulator"))
-        is_simulated = bool(data.get("is_simulated", True))
         simulated_location = data.get("simulated_location")
+
+        # SECURITY: Always set is_simulated=1 for this endpoint regardless of
+        # the client-supplied value.  The simulate endpoint is ONLY for demo
+        # / simulation data and the caller cannot override this flag.
+        is_simulated = True
 
         if not attack or risk is None:
             return jsonify({"error": "Bad Request", "message": "'attack' and 'risk' are required"}), 400
@@ -414,14 +681,14 @@ def create_app(test_config=None) -> Flask:
         # Resolve IP and Location safely
         client_ip = request.remote_addr or "127.0.0.1"
 
-        if is_simulated and simulated_location and isinstance(simulated_location, str):
+        if simulated_location and isinstance(simulated_location, str):
             location = f"{simulated_location[:60]} (Simulated)"
         else:
             base_loc = resolve_ip_location(
                 client_ip,
                 enable_external_geoip=app.config["ENABLE_EXTERNAL_GEOIP"]
             )
-            location = f"{base_loc} (Simulated)" if is_simulated else base_loc
+            location = f"{base_loc} (Simulated)"
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -429,8 +696,8 @@ def create_app(test_config=None) -> Flask:
         c = conn.cursor()
         c.execute("""
             INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-        """, (username, attack, behavior, risk, client_ip, location, timestamp, 1 if is_simulated else 0))
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)
+        """, (username, attack, behavior, risk, client_ip, location, timestamp))
         log_id = c.lastrowid
         conn.commit()
         conn.close()
@@ -483,6 +750,97 @@ def create_app(test_config=None) -> Flask:
         conn.commit()
         conn.close()
         return jsonify({"status": "success", "message": "All incident logs cleared"}), 200
+
+    # ---------------------------------------------------------
+    # Metrics Endpoint
+    # ---------------------------------------------------------
+    @app.route("/api/metrics", methods=["GET"])
+    @login_required
+    def get_metrics():
+        """
+        Returns aggregated security metrics for the dashboard.
+
+        Health score formula:
+          Start at 100
+          - 8 per unresolved critical incident  (risk >= 80)
+          - 5 per unresolved high incident       (60 <= risk < 80)
+          - 2 per unresolved medium incident     (40 <= risk < 60)
+          - 0 for unresolved low incidents       (risk < 40)
+          Minimum value: 0
+        """
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        week_start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        c.execute("SELECT COUNT(*) FROM logs")
+        total_incidents = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE resolved = 0")
+        open_incidents = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE resolved = 1")
+        resolved_incidents = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE risk >= ?", (80,))
+        critical_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE risk >= ? AND risk < ?", (60, 80))
+        high_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE risk >= ? AND risk < ?", (40, 60))
+        medium_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE risk < ?", (40,))
+        low_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE is_simulated = 1")
+        simulated_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE is_simulated = 0")
+        telemetry_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE time >= ?", (f"{today_str} 00:00:00",))
+        today_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE time >= ?", (f"{week_start} 00:00:00",))
+        week_count = c.fetchone()[0]
+
+        # Unresolved counts per severity level (for health score)
+        c.execute("SELECT COUNT(*) FROM logs WHERE resolved = 0 AND risk >= ?", (80,))
+        open_critical = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE resolved = 0 AND risk >= ? AND risk < ?", (60, 80))
+        open_high = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM logs WHERE resolved = 0 AND risk >= ? AND risk < ?", (40, 60))
+        open_medium = c.fetchone()[0]
+
+        conn.close()
+
+        health_score = max(
+            0,
+            100
+            - (open_critical * 8)
+            - (open_high * 5)
+            - (open_medium * 2)
+        )
+
+        return jsonify({
+            "total_incidents": total_incidents,
+            "open_incidents": open_incidents,
+            "resolved_incidents": resolved_incidents,
+            "critical_count": critical_count,
+            "high_count": high_count,
+            "medium_count": medium_count,
+            "low_count": low_count,
+            "simulated_count": simulated_count,
+            "telemetry_count": telemetry_count,
+            "health_score": health_score,
+            "today_count": today_count,
+            "week_count": week_count,
+        }), 200
 
     # ---------------------------------------------------------
     # Secure Error Handlers

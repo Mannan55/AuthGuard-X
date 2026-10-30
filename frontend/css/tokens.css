@@ -1,0 +1,136 @@
+/**
+ * AuthGuard-X Design Tokens
+ * CSS custom properties — single source of truth for the design system.
+ * Sprint 1 · Professional SOC aesthetic
+ */
+
+:root {
+  /* ── Colour Palette ─────────────────────────────────── */
+  --color-bg:              #0a0e1a;
+  --color-surface:         #0f1629;
+  --color-surface-raised:  #131c35;
+  --color-border:          #1e2a45;
+  --color-border-subtle:   #162036;
+
+  /* Text */
+  --color-text-primary:    #e2e8f0;
+  --color-text-secondary:  #64748b;
+  --color-text-muted:      #475569;
+  --color-text-inverse:    #0a0e1a;
+
+  /* Accent */
+  --color-accent:          #38bdf8;
+  --color-accent-dim:      rgba(56, 189, 248, 0.12);
+  --color-accent-hover:    #7dd3fc;
+
+  /* Semantic */
+  --color-success:         #22c55e;
+  --color-success-dim:     rgba(34, 197, 94, 0.12);
+  --color-warning:         #f59e0b;
+  --color-warning-dim:     rgba(245, 158, 11, 0.12);
+  --color-danger:          #ef4444;
+  --color-danger-dim:      rgba(239, 68, 68, 0.12);
+  --color-critical:        #dc2626;
+  --color-critical-dim:    rgba(220, 38, 38, 0.12);
+  --color-info:            #3b82f6;
+  --color-info-dim:        rgba(59, 130, 246, 0.12);
+  --color-resolved:        #475569;
+  --color-resolved-dim:    rgba(71, 85, 105, 0.16);
+
+  /* Severity */
+  --severity-critical-fg:  #dc2626;
+  --severity-critical-bg:  rgba(220, 38, 38, 0.12);
+  --severity-high-fg:      #f59e0b;
+  --severity-high-bg:      rgba(245, 158, 11, 0.12);
+  --severity-medium-fg:    #3b82f6;
+  --severity-medium-bg:    rgba(59, 130, 246, 0.12);
+  --severity-low-fg:       #22c55e;
+  --severity-low-bg:       rgba(34, 197, 94, 0.12);
+  --severity-resolved-fg:  #475569;
+  --severity-resolved-bg:  rgba(71, 85, 105, 0.16);
+
+  /* Sidebar */
+  --sidebar-bg:            #080c18;
+  --sidebar-width:         240px;
+  --sidebar-width-collapsed: 56px;
+
+  /* ── Typography ─────────────────────────────────────── */
+  --font-sans:    'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
+
+  --text-xs:      0.6875rem;   /* 11px */
+  --text-sm:      0.8125rem;   /* 13px */
+  --text-base:    0.875rem;    /* 14px */
+  --text-md:      1rem;        /* 16px */
+  --text-lg:      1.125rem;    /* 18px */
+  --text-xl:      1.25rem;     /* 20px */
+  --text-2xl:     1.5rem;      /* 24px */
+  --text-3xl:     2rem;        /* 32px */
+  --text-4xl:     2.5rem;      /* 40px */
+
+  --font-normal:  400;
+  --font-medium:  500;
+  --font-semibold:600;
+  --font-bold:    700;
+
+  --leading-tight:  1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed:1.625;
+
+  /* ── Spacing (8px grid) ─────────────────────────────── */
+  --space-1:   4px;
+  --space-2:   8px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-7:   28px;
+  --space-8:   32px;
+  --space-10:  40px;
+  --space-12:  48px;
+  --space-16:  64px;
+
+  /* ── Border Radius ──────────────────────────────────── */
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:   8px;
+  --radius-xl:   12px;
+  --radius-2xl:  16px;
+  --radius-full: 9999px;
+
+  /* ── Shadows ────────────────────────────────────────── */
+  --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md:   0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg:   0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-xl:   0 16px 40px rgba(0, 0, 0, 0.7);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--color-border);
+
+  /* ── Transitions ────────────────────────────────────── */
+  --transition-fast:    150ms ease;
+  --transition-normal:  200ms ease;
+  --transition-slow:    300ms ease;
+
+  /* ── Z-index scale ──────────────────────────────────── */
+  --z-base:    0;
+  --z-raised:  10;
+  --z-sidebar: 100;
+  --z-topbar:  90;
+  --z-modal:   200;
+  --z-toast:   300;
+  --z-overlay: 150;
+
+  /* ── Layout ─────────────────────────────────────────── */
+  --topbar-height: 56px;
+  --content-max-width: 1280px;
+}
+
+/* Reduced-motion override — must always be present */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration:  0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

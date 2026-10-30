@@ -39,5 +39,6 @@ jobs:
           DEMO_ADMIN_USER: testadmin
           DEMO_ADMIN_PASSWORD: TestPassword123!
           SECRET_KEY: ci-test-secret-key-32bytes-long!!
+          WTF_CSRF_ENABLED: "false"
         run: |
-          pytest tests -v
+          pytest tests -v --tb=short
