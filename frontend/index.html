@@ -119,6 +119,23 @@
           <span id="nav-my-queue-count" class="badge badge-subtle nav-count" style="margin-left: auto; display: none;">0</span>
         </a>
 
+        <a href="#detection-alerts" class="nav-link" data-view="detection-alerts">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <span class="nav-label">Detection Alerts</span>
+          <span id="nav-alerts-count" class="badge badge-subtle nav-count" style="margin-left: auto; display: none;">0</span>
+        </a>
+
+        <a href="#detection-rules" class="nav-link" data-view="detection-rules">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+          <span class="nav-label">Detection Rules</span>
+        </a>
+
         <a href="#simulations" class="nav-link" data-view="simulations">
           <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
@@ -896,6 +913,81 @@
             </div>
 
           </div>
+
+          <!-- Sprint 3: Threat Correlation & Synthetic Replay Pipeline -->
+          <div class="card" style="margin-top: var(--space-4);">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">Threat Correlation & Synthetic Replay Pipeline</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Replay realistic adversary campaigns that trigger detection rules across sliding time windows with server-side correlation</span>
+              </div>
+              <span class="badge badge-primary">Detection Engineering</span>
+            </div>
+            <p class="text-muted" style="font-size: var(--text-sm); line-height: var(--leading-relaxed); margin-bottom: var(--space-4);">
+              Execute synthetic adversary scenarios. The backend correlation engine groups incidents by IP, username, or attack vector within configured sliding time windows, generating tamper-evident detection alerts with idempotency hashing.
+            </p>
+            <div class="replay-scenarios-grid">
+              <div class="replay-card">
+                <div>
+                  <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Full Adversary Campaign</strong>
+                  <div class="text-muted text-xs" style="margin-top: 4px; margin-bottom: var(--space-3);">
+                    Executes all 4 multi-incident threat scenarios across distinct time buckets and entity dimensions.
+                  </div>
+                </div>
+                <button id="btn-replay-all" class="btn btn-primary btn-sm btn-block">
+                  Replay Full Campaign (All Scenarios)
+                </button>
+              </div>
+
+              <div class="replay-card">
+                <div>
+                  <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Credential Spraying Burst</strong>
+                  <div class="text-muted text-xs" style="margin-top: 4px; margin-bottom: var(--space-3);">
+                    5 synthetic brute-force authentication logs targeting <code>admin</code> within a 300s window. Triggers RULE-AUTH-001 (T1110.003).
+                  </div>
+                </div>
+                <button id="btn-replay-cred" class="btn btn-secondary btn-sm btn-block">
+                  Replay Credential Spray
+                </button>
+              </div>
+
+              <div class="replay-card">
+                <div>
+                  <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Port Scan & Reconnaissance</strong>
+                  <div class="text-muted text-xs" style="margin-top: 4px; margin-bottom: var(--space-3);">
+                    4 telemetry probes from source IP <code>198.51.100.42</code>. Triggers RULE-NET-002 (T1046 Network Service Discovery).
+                  </div>
+                </div>
+                <button id="btn-replay-recon" class="btn btn-secondary btn-sm btn-block">
+                  Replay Recon Burst
+                </button>
+              </div>
+
+              <div class="replay-card">
+                <div>
+                  <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Lateral Movement & Exploit</strong>
+                  <div class="text-muted text-xs" style="margin-top: 4px; margin-bottom: var(--space-3);">
+                    High-risk lateral traversal events from internal subnet host. Triggers RULE-EXPLOIT-003 (T1021.002 SMB/Windows Admin Shares).
+                  </div>
+                </div>
+                <button id="btn-replay-exploit" class="btn btn-secondary btn-sm btn-block">
+                  Replay Lateral Exploit
+                </button>
+              </div>
+
+              <div class="replay-card">
+                <div>
+                  <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Kerberoasting Ticket Request</strong>
+                  <div class="text-muted text-xs" style="margin-top: 4px; margin-bottom: var(--space-3);">
+                    Active Directory Kerberos SPN ticket extraction attempts with weak RC4 encryption. Triggers RULE-KERB-006 (T1558.003).
+                  </div>
+                </div>
+                <button id="btn-replay-kerb" class="btn btn-secondary btn-sm btn-block">
+                  Replay Kerberoasting
+                </button>
+              </div>
+            </div>
+          </div>
         </section>
 
 
@@ -915,6 +1007,198 @@
             <div id="attack-map-canvas" class="attack-map-wrapper">
               <img src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg" alt="World Map Vector" class="world-map-svg">
               <div class="map-disclaimer-pill">Simulated Coordinate Projections • No External Geotracking</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===================================================================
+             VIEW: DETECTION ALERTS WORKSPACE
+             =================================================================== -->
+        <section id="view-detection-alerts" class="view-panel">
+          
+          <!-- Alerts Header -->
+          <div class="card" style="margin-bottom: var(--space-4);">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">Detection Alerts Workspace</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Time-window threat correlation alerts, explainability narratives, and case escalation pipeline</span>
+              </div>
+              <span class="badge badge-primary">Correlation Engine</span>
+            </div>
+            <p class="text-muted" style="font-size: var(--text-sm); line-height: var(--leading-relaxed);">
+              Alerts generated by database-backed detection rules with sliding time-window correlation. Each alert groups matching security telemetry into an explainable threat record that can be escalated directly to a SOC investigation case.
+            </p>
+          </div>
+
+          <!-- Alert Metrics Cards -->
+          <div class="queue-kpi-grid">
+            <div class="card kpi-card">
+              <span class="kpi-label">Total Generated Alerts</span>
+              <div id="metric-total-alerts" class="kpi-value text-primary">0</div>
+              <span class="kpi-subtext">Persisted in database</span>
+            </div>
+            <div class="card kpi-card">
+              <span class="kpi-label">Open Alerts</span>
+              <div id="metric-open-alerts" class="kpi-value text-warning">0</div>
+              <span class="kpi-subtext">Pending triage</span>
+            </div>
+            <div class="card kpi-card">
+              <span class="kpi-label">Critical Alerts</span>
+              <div id="metric-critical-alerts" class="kpi-value text-danger">0</div>
+              <span class="kpi-subtext">Severity &ge; 80 / Critical</span>
+            </div>
+            <div class="card kpi-card">
+              <span class="kpi-label">Escalated Cases</span>
+              <div id="metric-escalated-alerts" class="kpi-value text-info">0</div>
+              <span class="kpi-subtext">Active SOC investigations</span>
+            </div>
+          </div>
+
+          <!-- Alert Feed Filters & Table -->
+          <div class="card">
+            <div class="card-header" style="flex-wrap: wrap; gap: var(--space-3);">
+              <div>
+                <h3 class="card-title">Detection Alert Feed</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Filter by severity, status, or search rule/entity</span>
+              </div>
+              
+              <div style="display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center;">
+                <input id="alerts-search-input" type="search" class="form-input" placeholder="Search rule, IP, or user..." style="max-width: 200px;">
+                <select id="alerts-filter-severity" class="form-select" style="max-width: 130px;">
+                  <option value="all">All Severities</option>
+                  <option value="critical">Critical</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+                <select id="alerts-filter-status" class="form-select" style="max-width: 130px;">
+                  <option value="all">All Statuses</option>
+                  <option value="open">Open</option>
+                  <option value="escalated">Escalated</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="table-container">
+              <table id="detection-alerts-table" class="data-table">
+                <thead>
+                  <tr>
+                    <th>Alert ID / Time</th>
+                    <th>Detection Rule</th>
+                    <th>Severity</th>
+                    <th>MITRE Technique</th>
+                    <th>Correlation / Group Key</th>
+                    <th>Status</th>
+                    <th style="text-align: right;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="detection-alerts-table-body">
+                  <tr>
+                    <td colspan="7" class="table-empty">Loading detection alerts...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Alerts Pagination Bar -->
+            <div class="pagination-bar" style="display: flex; justify-content: space-between; align-items: center; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-border);">
+              <button id="btn-alerts-page-prev" class="btn btn-secondary btn-sm" disabled>&larr; Previous</button>
+              <span id="alerts-pagination-info" class="text-muted text-xs">Page 1 of 1</span>
+              <button id="btn-alerts-page-next" class="btn btn-secondary btn-sm" disabled>Next &rarr;</button>
+            </div>
+          </div>
+        </section>
+
+
+        <!-- ===================================================================
+             VIEW: DETECTION RULES MANAGEMENT
+             =================================================================== -->
+        <section id="view-detection-rules" class="view-panel">
+          
+          <!-- Rules Header -->
+          <div class="card" style="margin-bottom: var(--space-4);">
+            <div class="card-header" style="flex-wrap: wrap; gap: var(--space-3);">
+              <div>
+                <h3 class="card-title">Detection Rule Management</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Deterministic SOC condition matching, sliding time-window thresholds, and MITRE ATT&CK mappings</span>
+              </div>
+              <button id="btn-create-rule" class="btn btn-primary btn-sm">
+                + Create Detection Rule
+              </button>
+            </div>
+            <p class="text-muted" style="font-size: var(--text-sm); line-height: var(--leading-relaxed);">
+              Detection rules define deterministic criteria for matching telemetry and correlating events across configurable time windows without dynamic code execution. Rules are evaluated atomically against incoming logs.
+            </p>
+          </div>
+
+          <!-- Rules KPI Grid -->
+          <div class="queue-kpi-grid">
+            <div class="card kpi-card">
+              <span class="kpi-label">Active Detection Rules</span>
+              <div id="metric-active-rules" class="kpi-value text-primary">6</div>
+              <span class="kpi-subtext">Enabled & evaluating</span>
+            </div>
+            <div class="card kpi-card">
+              <span class="kpi-label">Total Configured Rules</span>
+              <div id="metric-total-rules" class="kpi-value text-secondary">6</div>
+              <span class="kpi-subtext">In database</span>
+            </div>
+            <div class="card kpi-card">
+              <span class="kpi-label">Evaluated Telemetry Events</span>
+              <div id="metric-eval-events" class="kpi-value text-info">0</div>
+              <span class="kpi-subtext">Telemetry records inspected</span>
+            </div>
+            <div class="card kpi-card">
+              <span class="kpi-label">Total Triggered Alerts</span>
+              <div id="metric-eval-alerts" class="kpi-value text-warning">0</div>
+              <span class="kpi-subtext">Correlated threat incidents</span>
+            </div>
+          </div>
+
+          <!-- Rules Table Card -->
+          <div class="card">
+            <div class="card-header" style="flex-wrap: wrap; gap: var(--space-3);">
+              <div>
+                <h3 class="card-title">Configured Detection Rules</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Filter and inspect deterministic detection rules</span>
+              </div>
+              <div style="display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center;">
+                <input id="rules-search-input" type="search" class="form-input" placeholder="Search rules..." style="max-width: 200px;">
+                <select id="rules-filter-severity" class="form-select" style="max-width: 130px;">
+                  <option value="all">All Severities</option>
+                  <option value="critical">Critical</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+                <select id="rules-filter-status" class="form-select" style="max-width: 130px;">
+                  <option value="all">All Statuses</option>
+                  <option value="enabled">Enabled</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="table-container">
+              <table id="detection-rules-table" class="data-table">
+                <thead>
+                  <tr>
+                    <th>Rule ID / Name</th>
+                    <th>Severity</th>
+                    <th>MITRE Technique</th>
+                    <th>Correlation & Threshold</th>
+                    <th>Status</th>
+                    <th>Triggers</th>
+                    <th style="text-align: right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="detection-rules-table-body">
+                  <tr>
+                    <td colspan="7" class="table-empty">Loading detection rules...</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -1047,6 +1331,219 @@
     </div>
   </div>
 
+  <!-- Sprint 3: Rule Inspection Modal -->
+  <div id="modal-rule-detail" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3 class="modal-title"><span id="rule-detail-name">Rule Detail</span></h3>
+          <span id="rule-detail-id" class="text-muted font-mono text-xs">RULE-000</span>
+        </div>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="rule-detail-desc" class="text-muted text-sm" style="margin-bottom: var(--space-4);"></p>
+        
+        <div class="grid-2-col" style="gap: var(--space-3); margin-bottom: var(--space-4);">
+          <div class="card" style="padding: var(--space-3);">
+            <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Configuration & Thresholds</div>
+            <div style="display: flex; gap: var(--space-2); margin-top: var(--space-1); align-items: center;">
+              <span>Severity:</span> <span id="rule-detail-severity" class="badge">MEDIUM</span>
+              <span style="margin-left: var(--space-2);">Status:</span> <span id="rule-detail-status" class="badge">ENABLED</span>
+              <span id="rule-detail-version" class="badge badge-subtle ml-auto">v1</span>
+            </div>
+            <div style="font-size: var(--text-xs); color: var(--color-text-secondary); margin-top: var(--space-2);">
+              Correlation: Threshold &ge; <strong id="rule-detail-threshold" class="text-primary">1</strong> event(s) in <strong id="rule-detail-window" class="text-primary">300s</strong> grouped by <strong id="rule-detail-groupby" class="text-accent">none</strong>.
+            </div>
+          </div>
+
+          <div class="card" style="padding: var(--space-3);">
+            <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">MITRE ATT&CK Technique</div>
+            <div id="rule-detail-mitre"></div>
+          </div>
+        </div>
+
+        <div style="margin-bottom: var(--space-4);">
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-2);">Match Conditions (Zero Eval / Schema-Constrained)</div>
+          <div id="rule-detail-conditions" style="display: flex; flex-wrap: wrap; gap: var(--space-1);"></div>
+        </div>
+
+        <div>
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-2);">Audit Log & History</div>
+          <div id="rule-detail-audit-log" class="card" style="padding: var(--space-2) var(--space-3); max-height: 160px; overflow-y: auto;"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sprint 3: Rule Editor Modal -->
+  <div id="modal-rule-editor" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 id="modal-rule-editor-title" class="modal-title">Create Custom Detection Rule</h3>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <form id="form-rule-editor">
+        <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+          <div class="grid-2-col" style="gap: var(--space-3); margin-bottom: var(--space-3);">
+            <div class="form-group">
+              <label for="rule-editor-id" class="form-label">Rule Identifier</label>
+              <input id="rule-editor-id" type="text" class="form-input font-mono" placeholder="e.g. RULE-AUTH-007" required>
+            </div>
+            <div class="form-group">
+              <label for="rule-editor-severity" class="form-label">Alert Severity</label>
+              <select id="rule-editor-severity" class="form-select">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-bottom: var(--space-3);">
+            <label for="rule-editor-name" class="form-label">Rule Name</label>
+            <input id="rule-editor-name" type="text" class="form-input" placeholder="e.g. Suspicious Administrative Token Activity" required>
+          </div>
+
+          <div class="form-group" style="margin-bottom: var(--space-4);">
+            <label for="rule-editor-desc" class="form-label">Description & Analyst Rationale</label>
+            <textarea id="rule-editor-desc" class="form-input" rows="2" placeholder="Explain the attack behavior and why this rule generates an alert."></textarea>
+          </div>
+
+          <!-- Dynamic Conditions Builder -->
+          <div class="card" style="padding: var(--space-3); margin-bottom: var(--space-4); background: var(--color-surface);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-2);">
+              <div>
+                <strong style="font-size: var(--text-sm); color: var(--color-text-primary);">Condition Criteria</strong>
+                <div class="text-muted text-xs">Evaluated conjunctively (AND). No arbitrary code execution.</div>
+              </div>
+              <button type="button" id="btn-add-rule-condition" class="btn btn-secondary btn-sm">
+                + Add Condition
+              </button>
+            </div>
+            <div id="rule-conditions-builder"></div>
+          </div>
+
+          <!-- Correlation Settings -->
+          <div class="card" style="padding: var(--space-3); margin-bottom: var(--space-4); background: var(--color-surface);">
+            <strong style="font-size: var(--text-sm); color: var(--color-text-primary); margin-bottom: var(--space-2); display: block;">Sliding Window Threat Correlation</strong>
+            <div class="grid-3-col" style="gap: var(--space-3);">
+              <div class="form-group">
+                <label for="rule-editor-threshold" class="form-label">Threshold Count (&ge;)</label>
+                <input id="rule-editor-threshold" type="number" min="1" max="100" class="form-input" value="1" required>
+              </div>
+              <div class="form-group">
+                <label for="rule-editor-window" class="form-label">Time Window (seconds)</label>
+                <input id="rule-editor-window" type="number" min="10" max="86400" class="form-input" value="300" required>
+              </div>
+              <div class="form-group">
+                <label for="rule-editor-groupby" class="form-label">Group By Entity</label>
+                <select id="rule-editor-groupby" class="form-select">
+                  <option value="none">None (Global Count)</option>
+                  <option value="ip">Origin IP Address</option>
+                  <option value="username">Target Username</option>
+                  <option value="behavior">Behavior Type</option>
+                  <option value="attack">Attack Vector</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- MITRE ATT&CK Mapping -->
+          <div class="card" style="padding: var(--space-3); background: var(--color-surface);">
+            <strong style="font-size: var(--text-sm); color: var(--color-text-primary); margin-bottom: var(--space-2); display: block;">MITRE ATT&CK Mapping (Optional)</strong>
+            <div class="grid-2-col" style="gap: var(--space-3); margin-bottom: var(--space-2);">
+              <div class="form-group">
+                <label for="rule-editor-mitre-id" class="form-label">Technique ID</label>
+                <input id="rule-editor-mitre-id" type="text" class="form-input font-mono" placeholder="e.g. T1078 or T1110.003">
+              </div>
+              <div class="form-group">
+                <label for="rule-editor-mitre-name" class="form-label">Technique Name</label>
+                <input id="rule-editor-mitre-name" type="text" class="form-input" placeholder="e.g. Valid Accounts">
+              </div>
+            </div>
+            <div class="grid-2-col" style="gap: var(--space-3);">
+              <div class="form-group">
+                <label for="rule-editor-mitre-tactic" class="form-label">Tactic Name</label>
+                <input id="rule-editor-mitre-tactic" type="text" class="form-input" placeholder="e.g. Defense Evasion">
+              </div>
+              <div class="form-group">
+                <label for="rule-editor-mitre-url" class="form-label">MITRE URL</label>
+                <input id="rule-editor-mitre-url" type="url" class="form-input" placeholder="https://attack.mitre.org/techniques/T1078/">
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Detection Rule</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Sprint 3: Alert Detail Inspection Modal -->
+  <div id="modal-alert-detail" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3 class="modal-title"><span id="alert-detail-rule-name">Detection Alert Detail</span></h3>
+          <div style="display: flex; gap: var(--space-2); align-items: center; margin-top: 2px;">
+            <span id="alert-detail-id" class="text-accent font-mono text-xs">ALT-000</span>
+            <span class="text-muted text-xs">&bull;</span>
+            <span id="alert-detail-rule-id" class="text-muted font-mono text-xs">RULE-000</span>
+            <span class="text-muted text-xs">&bull;</span>
+            <span id="alert-detail-timestamp" class="text-muted text-xs">—</span>
+          </div>
+        </div>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+        <div style="display: flex; gap: var(--space-2); margin-bottom: var(--space-3); align-items: center;">
+          <span id="alert-detail-severity" class="badge">CRITICAL</span>
+          <span id="alert-detail-status" class="badge">OPEN</span>
+        </div>
+
+        <div id="alert-detail-explanation"></div>
+
+        <div id="alert-detail-mitre" style="margin-bottom: var(--space-4);"></div>
+
+        <div>
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-2);">Correlated Incident Telemetry Records</div>
+          <div class="table-container" style="max-height: 220px; overflow-y: auto;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Log ID</th>
+                  <th>Timestamp</th>
+                  <th>Attack Vector</th>
+                  <th>Behavior</th>
+                  <th>Severity</th>
+                  <th>Origin IP</th>
+                </tr>
+              </thead>
+              <tbody id="alert-correlated-incidents-body">
+                <tr><td colspan="6" class="text-muted text-center py-2">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <div id="alert-escalation-action-container"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Non-intrusive Toast Container -->
   <div id="toast-container" class="toast-shelf" aria-live="polite"></div>
 
@@ -1060,6 +1557,7 @@
   <script src="js/dashboard.js"></script>
   <script src="js/incidents.js"></script>
   <script src="js/investigation.js"></script>
+  <script src="js/detection.js"></script>
 
   <script>
     // ── Single Page View Router ──────────────────────────────────────
@@ -1084,6 +1582,8 @@
         'incidents': 'Security Incident Feed',
         'my-queue': 'Analyst Incident Queue',
         'investigation': 'Incident Investigation Workspace',
+        'detection-alerts': 'Detection Alerts Workspace',
+        'detection-rules': 'Detection Rule Management',
         'simulations': 'Attack Simulation Engine',
         'threat-map': 'Global Telemetry Vectors'
       };
@@ -1094,6 +1594,12 @@
       }
       if (baseView === 'incidents' && window.Incidents && typeof window.Incidents.refresh === 'function') {
         window.Incidents.refresh();
+      }
+      if (baseView === 'detection-alerts' && window.Detection && typeof window.Detection.loadAlerts === 'function') {
+        window.Detection.loadAlerts();
+      }
+      if (baseView === 'detection-rules' && window.Detection && typeof window.Detection.loadRules === 'function') {
+        window.Detection.loadRules();
       }
     }
 
@@ -1120,6 +1626,7 @@
       window.Dashboard.init();
       window.Incidents.init();
       window.Investigation.init();
+      window.Detection.init();
 
       const initialHash = window.location.hash.replace('#', '') || 'overview';
       switchView(initialHash);

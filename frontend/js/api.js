@@ -280,6 +280,75 @@
           body: JSON.stringify(payload)
         });
       }
+    },
+    detection: {
+      async getRules(params = {}) {
+        const query = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && v !== '' && v !== 'all') {
+            query.append(k, v);
+          }
+        });
+        const qs = query.toString();
+        return apiFetch(`/api/detection/rules${qs ? `?${qs}` : ''}`);
+      },
+      async getRule(ruleId) {
+        return apiFetch(`/api/detection/rules/${encodeURIComponent(ruleId)}`);
+      },
+      async createRule(payload) {
+        return apiFetch('/api/detection/rules', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      },
+      async updateRule(ruleId, payload) {
+        return apiFetch(`/api/detection/rules/${encodeURIComponent(ruleId)}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
+        });
+      },
+      async toggleRule(ruleId) {
+        return apiFetch(`/api/detection/rules/${encodeURIComponent(ruleId)}/toggle`, {
+          method: 'POST'
+        });
+      },
+      async deleteRule(ruleId) {
+        return apiFetch(`/api/detection/rules/${encodeURIComponent(ruleId)}`, {
+          method: 'DELETE'
+        });
+      },
+      async getAlerts(params = {}) {
+        const query = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && v !== '' && v !== 'all') {
+            query.append(k, v);
+          }
+        });
+        const qs = query.toString();
+        return apiFetch(`/api/detection/alerts${qs ? `?${qs}` : ''}`);
+      },
+      async getAlert(alertId) {
+        return apiFetch(`/api/detection/alerts/${encodeURIComponent(alertId)}`);
+      },
+      async escalateAlert(alertId) {
+        return apiFetch(`/api/detection/alerts/${encodeURIComponent(alertId)}/escalate`, {
+          method: 'POST'
+        });
+      },
+      async closeAlert(alertId) {
+        return apiFetch(`/api/detection/alerts/${encodeURIComponent(alertId)}/close`, {
+          method: 'POST'
+        });
+      },
+      async getMetrics() {
+        return apiFetch('/api/detection/metrics');
+      },
+      async replay(preset = 'all') {
+        return apiFetch('/api/detection/replay', {
+          method: 'POST',
+          body: JSON.stringify({ preset })
+        });
+      }
     }
   };
 

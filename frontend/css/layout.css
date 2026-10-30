@@ -43,7 +43,14 @@ svg {
   max-width:      100%;
 }
 
+svg:not(.world-map-svg) {
+  max-width:  48px;
+  max-height: 48px;
+}
+
 svg:not([width]) {
+  width:      20px;
+  height:     20px;
   max-width:  24px;
   max-height: 24px;
 }

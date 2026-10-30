@@ -5,7 +5,7 @@
 [![Flask](https://img.shields.io/badge/backend-Flask%203.1-black.svg)](https://flask.palletsprojects.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-AuthGuard-X is a professional Security Operations Center (SOC) demonstration, training, and incident investigation platform designed for cybersecurity analysts, educators, and incident response teams. It models an identity security monitoring system that detects, visualizes, investigates, and remediates suspicious authentication telemetry, credential attacks, and anomalous behavior.
+AuthGuard-X is a professional Security Operations Center (SOC) demonstration, training, detection engineering, and incident investigation platform designed for cybersecurity analysts, educators, and incident response teams. It models an identity security monitoring system that detects, correlates, visualizes, investigates, and remediates suspicious authentication telemetry, credential attacks, and anomalous behavior.
 
 > **Simulation & Telemetry Provenance Disclosure:** All attack vectors, simulated incident streams, and geographic origins are generated locally for training and demonstration purposes with server-enforced provenance (`is_simulated = 1`). AuthGuard-X does not execute live exploits or claim unverified external threat feeds.
 
@@ -44,10 +44,14 @@ AuthGuard-X is a professional Security Operations Center (SOC) demonstration, tr
 
 1. **Structured Case Investigation Training**: Transition junior and tier-2 analysts from basic alert closing to a rigorous 4-stage lifecycle state machine (**New → Investigating → Contained → Resolved**).
 2. **Analyst Ownership & Queue Triage**: Model multi-analyst SOC shift workflows where analysts claim unassigned incidents, manage personal active queues, and collaborate with role-based isolation.
-3. **Forensic Findings & Evidence Collection**: Capture timestamped triage observations, hypothesis testing notes, and attach structured evidence pointers (IOC hashes, network PCAP references, log excerpts) with URL scheme safety validation (strictly rejecting unsafe URI schemes like `javascript:`, `data:`, `file:`).
-4. **Accountability & Transactional Auditing**: Maintain an append-only audit trail logging every state transition, analyst reassignment, and containment timestamp with server-derived actor identity, plus a persistent system administrative audit log retained across incident purges.
-5. **Attack Vector Simulation Engine**: Generate synthetic credential-stuffing, lateral traversal, and Kerberoasting telemetry to evaluate detection posture and test analyst workflows with server-enforced provenance.
-6. **Defensive Hardening Reference**: Production-grade Flask architecture featuring bcrypt password hashing (12 rounds), signed session cookies, CSRF protection, optimistic concurrency locking (`version`), RBAC middleware, and XSS sanitization.
+3. **Detection Engineering & Custom Rules**: Author and tune enterprise detection rules with schema-constrained conditions (`equals`, `contains`, `greater_than`, `in`, `regex_safe`), configurable severity, and time-window correlation thresholds without insecure code execution (`eval`).
+4. **Sliding-Window Threat Correlation Engine**: Correlate high-velocity multi-event attacks (e.g. distributed brute force across target usernames, IP reconnaissance bursts) using sliding time windows and deterministic SHA-256 idempotency hashing to prevent duplicate alert storms.
+5. **MITRE ATT&CK Mapping & Explainability**: Align detections directly to official ATT&CK tactics, techniques, and sub-techniques (T1110.001, T1046, T1190, T1078, T1059, T1558.003) with direct HTTPS links and dynamic narrative summaries.
+6. **Alert Escalation to Investigation Cases**: One-click escalation transition linking correlated alerts directly to incident response investigation cases with full provenance and audit logging.
+7. **Forensic Findings & Evidence Collection**: Capture timestamped triage observations, hypothesis testing notes, and attach structured evidence pointers (IOC hashes, network PCAP references, log excerpts) with URL scheme safety validation (strictly rejecting unsafe URI schemes like `javascript:`, `data:`, `file:`).
+8. **Accountability & Transactional Auditing**: Maintain an append-only audit trail logging every state transition, analyst reassignment, rule modification, and containment timestamp with server-derived actor identity, plus a persistent system administrative audit log retained across incident purges.
+9. **Attack Vector Simulation & Synthetic Replay**: Generate synthetic credential-stuffing, lateral traversal, and Kerberoasting telemetry to evaluate detection posture and test analyst workflows with server-enforced provenance.
+10. **Defensive Hardening Reference**: Production-grade Flask architecture featuring bcrypt password hashing (12 rounds), signed session cookies, CSRF protection, optimistic concurrency locking (`version`), RBAC middleware, and XSS sanitization.
 
 ---
 
@@ -58,6 +62,7 @@ AuthGuard-X is a professional Security Operations Center (SOC) demonstration, tr
                       |       Web Browser (Frontend)         |
                       |  - Modular Vanilla JS (ES6+)          |
                       |  - Design Tokens & 8px Spacing Grid   |
+                      |  - Detection Alerts & Rules Workspaces|
                       |  - Investigation Lifecycle Stepper    |
                       |  - Real-time Work Queue & Metrics     |
                       |  - XSS-Safe DOM Sanitization          |
@@ -69,10 +74,11 @@ AuthGuard-X is a professional Security Operations Center (SOC) demonstration, tr
                       +-------------------+-------------------+
                       |      Flask Application Server         |
                       |  - Session Auth & RBAC Middleware     |
+                      |  - Rule Engine (Safe Non-Eval AST)    |
+                      |  - Threat Correlation Engine (Windows)|
                       |  - Lifecycle State Machine Engine     |
                       |  - Flask-WTF CSRF Token Enforcement   |
                       |  - Rate Limiting (Flask-Limiter)      |
-                      |  - Search, Filter, Sort, Pagination   |
                       |  - Evidence Reference URL Validation  |
                       |  - Transactional Audit Logger         |
                       +-------------------+-------------------+
@@ -83,6 +89,9 @@ AuthGuard-X is a professional Security Operations Center (SOC) demonstration, tr
                       |  - `users`: bcrypt hashed credentials |
                       |  - `logs`: Incident telemetry records |
                       |  - `cases`: Lifecycle status & owners |
+                      |  - `detection_rules`: Authored rules  |
+                      |  - `detection_alerts`: Correlated alts|
+                      |  - `rule_audit_log`: Rule change log  |
                       |  - `incident_notes`: Forensic notes   |
                       |  - `incident_evidence`: Metadata/IOCs |
                       |  - `incident_audit_log`: Audit trail  |
@@ -131,6 +140,40 @@ AuthGuard-X implements an enterprise SOC incident response lifecycle:
 | `GET /api/cases/unassigned` (Unclaimed) | Allowed | Allowed | 401 Unauthorized |
 | `POST /api/incidents/clear` (Purge Protection) | 403 Forbidden | Requires `force_purge_investigations` + `purge_reason` | 401 Unauthorized |
 | `POST /api/users/create` (Create Analyst) | 403 Forbidden | Allowed | 401 Unauthorized |
+| `GET /api/detection/rules` (View Rules) | Allowed | Allowed | 401 Unauthorized |
+| `POST /api/detection/rules` (Create Rule) | 403 Forbidden | Allowed | 401 Unauthorized |
+| `PATCH /api/detection/rules/<id>` (Update Rule) | 403 Forbidden | Allowed | 401 Unauthorized |
+| `POST /api/detection/rules/<id>/toggle` (Toggle) | 403 Forbidden | Allowed | 401 Unauthorized |
+| `DELETE /api/detection/rules/<id>` (Delete Rule)| 403 Forbidden | Allowed | 401 Unauthorized |
+| `GET /api/detection/alerts` (List Alerts) | Allowed | Allowed | 401 Unauthorized |
+| `POST /api/detection/alerts/<id>/escalate` | Allowed | Allowed | 401 Unauthorized |
+| `POST /api/detection/alerts/<id>/close` | Allowed | Allowed | 401 Unauthorized |
+| `POST /api/detection/replay` (Threat Replay) | Allowed | Allowed | 401 Unauthorized |
+
+---
+
+## Detection Engineering & MITRE ATT&CK Matrix (Sprint 3)
+
+AuthGuard-X features a database-backed detection rule engine and a sliding time-window correlation engine. Detection rules evaluate incoming security telemetry against schema-constrained operators without dynamic code evaluation (`eval`), and group multi-event sequences into high-fidelity alerts.
+
+### Default Detection Rules & MITRE Mappings
+
+| Rule ID | Rule Name | MITRE ATT&CK ID | ATT&CK Technique | Window / Threshold | Severity |
+|---|---|:---:|---|:---:|:---:|
+| `RULE-AUTH-001` | High-Volume Credential Stuffing | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) | Brute Force: Password Guessing | 60s / 3 per target | Critical |
+| `RULE-NET-002` | Port Reconnaissance Burst | [T1046](https://attack.mitre.org/techniques/T1046/) | Network Service Discovery | 45s / 3 per source IP | High |
+| `RULE-EXPLOIT-003` | Critical Exploit Pattern Detected | [T1190](https://attack.mitre.org/techniques/T1190/) | Exploit Public-Facing Application | 0s / 1 event | Critical |
+| `RULE-BURST-004` | Distributed Multi-User Attack Burst | [T1078](https://attack.mitre.org/techniques/T1078/) | Valid Accounts | 120s / 5 total events | High |
+| `RULE-BEHAV-005` | Anomalous Shell Execution Behavior | [T1059](https://attack.mitre.org/techniques/T1059/) | Command and Scripting Interpreter | 30s / 2 per source IP | Medium |
+| `RULE-KERB-006` | Suspicious Kerberos Ticket Request | [T1558.003](https://attack.mitre.org/techniques/T1558/003/) | Steal or Forge Kerberos Tickets: Kerberoasting | 0s / 1 event | High |
+
+### Safe Rule Condition Evaluation Engine
+- **Allowed Fields**: `attack`, `username`, `ip_address`, `severity`, `risk_score`, `behavior`.
+- **Allowed Operators**: `equals`, `contains`, `greater_than`, `less_than`, `in`, `regex_safe`, `not_empty`.
+- **Zero Eval**: All comparisons execute strictly through typed Python AST comparisons with regex timeouts, rejecting any arbitrary execution attempts.
+- **Sliding-Window Correlation**: Aggregates incidents within a time window (e.g. 60 seconds) grouped by `target_username`, `source_ip`, or globally, firing an alert only when threshold counts are breached.
+- **Idempotency Protection**: Deterministic SHA-256 hashing across `rule_id`, `group_key`, and the correlation window prevents duplicate alert creation for identical event sequences.
+- **One-Click Case Escalation**: Analysts can escalate any correlated alert into a formal incident response case with bidirectional linking and full audit tracking.
 
 ---
 
@@ -143,7 +186,7 @@ AuthGuard-X implements an enterprise SOC incident response lifecycle:
 - **Traffic Protection**: `Flask-Limiter` (IP-based endpoint rate throttling)
 - **Frontend Architecture**: Modular Vanilla JavaScript (ES6+), design tokens (`tokens.css`), responsive layout (`layout.css`), accessible components (`components.css`), Chart.js
 - **Database Engine**: SQLite3 with strict foreign keys (`PRAGMA foreign_keys = ON`), indexed lookups, and idempotent migrations
-- **Automated QA**: Pytest suite (98 tests) and headless Chrome CDP browser automation (16 real assertions)
+- **Automated QA**: Pytest suite (112 tests across 4 suites) and headless Chrome CDP browser automation (16 real assertions)
 
 ---
 
@@ -213,17 +256,18 @@ Default development accounts:
 The project includes two comprehensive layers of automated verification:
 
 ```powershell
-# 1. Run the complete Pytest suite (98 tests)
+# 1. Run the complete Pytest suite (112 tests)
 pytest tests -v
 
 # 2. Run real-browser visual and functional verification (16 assertions + screenshots)
 python scripts/capture_evidence.py
 ```
 
-### Test Suite Distribution (98 Tests Total)
+### Test Suite Distribution (112 Tests Total)
 - **Phase 1 Baseline** (`tests/test_auth_guard.py` — 15 tests): Health check, login validation, session state, unauthenticated access blocking, and persistence across restarts.
 - **Sprint 1 Professional UI & Hardening** (`tests/test_sprint1.py` — 54 tests): CSRF validation, simulation provenance enforcement, server-derived metrics, pagination envelopes, search/filter/sort allowlists, detail endpoints, and XSS resistance.
 - **Sprint 2 Advanced SOC Investigation & Security Corrections** (`tests/test_sprint2.py` — 29 tests): Idempotent database migrations, automatic case creation, 4-stage lifecycle state machine, reopening workflow with incrementing `reopen_count`, mandatory resolution summary, strict case ownership enforcement (Analyst A cannot resolve Analyst B's cases), auto-claim policy on unassigned cases, strengthened optimistic concurrency locking with strict boolean and malformed value rejection (`version` validation, 428 Precondition Required for missing, 400 for malformed/booleans, 409 for conflict), multi-client simultaneous race safety, URI scheme safety validation for evidence, administrative log purge protection with mandatory reason and persistent `system_audit_log`, personal queue isolation, single Investigate handler deduplication, and CSRF enforcement on case APIs.
+- **Sprint 3 Detection Engineering & Threat Correlation** (`tests/test_sprint3.py` — 14 tests): Default rule seeding with verified MITRE ATT&CK techniques, schema-constrained condition validation rejecting `eval()` and injection payloads, rule CRUD with RBAC enforcement and optimistic concurrency locking, sliding time-window threat correlation across IP and username grouping, SHA-256 idempotency hashing preventing duplicate alerts, alert escalation into formal cases with audit logging, alert closure, synthetic threat replay scenarios, and detection analytics.
 
 ---
 

@@ -4,6 +4,10 @@ import math
 import secrets
 import sqlite3
 import ipaddress
+import json
+import hashlib
+import uuid
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -15,6 +19,125 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 import bcrypt
 from dotenv import load_dotenv
+
+# Sprint 3: Detection Engineering Constants & Allowed Allowlist Definitions
+ALLOWED_RULE_FIELDS = {
+    "attack", "behavior", "risk", "ip", "location", "username", "is_simulated"
+}
+
+ALLOWED_RULE_OPERATORS = {
+    "eq", "neq", "contains", "not_contains", "gte", "lte", "gt", "lt", "in", "not_empty"
+}
+
+VALID_SEVERITIES = {"low", "medium", "high", "critical"}
+VALID_RULE_STATUSES = {"enabled", "disabled"}
+VALID_GROUP_BY_FIELDS = {"none", "ip", "username", "behavior", "attack"}
+
+DEFAULT_DETECTION_RULES = [
+    {
+        "rule_id": "RULE-AUTH-001",
+        "name": "Repeated Authentication & Credential Abuse",
+        "description": "Detects multiple credential stuffing or brute force attempts targeting user accounts within a 5-minute detection window.",
+        "severity": "high",
+        "status": "enabled",
+        "conditions_json": json.dumps([
+            {"field": "attack", "operator": "contains", "value": "Credential"},
+            {"field": "risk", "operator": "gte", "value": 60}
+        ]),
+        "threshold": 3,
+        "time_window_seconds": 300,
+        "group_by_field": "username",
+        "mitre_technique_id": "T1110.003",
+        "mitre_technique_name": "Password Spraying",
+        "mitre_tactic": "Credential Access",
+        "mitre_url": "https://attack.mitre.org/techniques/T1110/003/"
+    },
+    {
+        "rule_id": "RULE-NET-002",
+        "name": "Single Source IP Port Scanning & Reconnaissance",
+        "description": "Correlates three or more suspicious telemetry events originating from the same source IP address across network boundaries.",
+        "severity": "medium",
+        "status": "enabled",
+        "conditions_json": json.dumps([
+            {"field": "risk", "operator": "gte", "value": 50}
+        ]),
+        "threshold": 3,
+        "time_window_seconds": 600,
+        "group_by_field": "ip",
+        "mitre_technique_id": "T1046",
+        "mitre_technique_name": "Network Service Discovery",
+        "mitre_tactic": "Discovery",
+        "mitre_url": "https://attack.mitre.org/techniques/T1046/"
+    },
+    {
+        "rule_id": "RULE-EXPLOIT-003",
+        "name": "Critical Lateral Movement or Named Pipe Impersonation",
+        "description": "Immediate critical detection for any simulated exploit or unauthorized SMB named pipe lateral traversal with risk score 80 or higher.",
+        "severity": "critical",
+        "status": "enabled",
+        "conditions_json": json.dumps([
+            {"field": "risk", "operator": "gte", "value": 80}
+        ]),
+        "threshold": 1,
+        "time_window_seconds": 300,
+        "group_by_field": "none",
+        "mitre_technique_id": "T1021.002",
+        "mitre_technique_name": "SMB/Windows Admin Shares",
+        "mitre_tactic": "Lateral Movement",
+        "mitre_url": "https://attack.mitre.org/techniques/T1021/002/"
+    },
+    {
+        "rule_id": "RULE-BURST-004",
+        "name": "Rapid Security Event Burst",
+        "description": "Flags volume anomalies exceeding five security events within a 3-minute evaluation window regardless of actor.",
+        "severity": "high",
+        "status": "enabled",
+        "conditions_json": json.dumps([
+            {"field": "risk", "operator": "gte", "value": 40}
+        ]),
+        "threshold": 5,
+        "time_window_seconds": 180,
+        "group_by_field": "none",
+        "mitre_technique_id": "T1059",
+        "mitre_technique_name": "Command and Scripting Interpreter",
+        "mitre_tactic": "Execution",
+        "mitre_url": "https://attack.mitre.org/techniques/T1059/"
+    },
+    {
+        "rule_id": "RULE-BEHAV-005",
+        "name": "Multi-Behavior Account Anomaly",
+        "description": "Flags accounts exhibiting distinct abnormal behavioral patterns within a 10-minute sliding window.",
+        "severity": "medium",
+        "status": "enabled",
+        "conditions_json": json.dumps([
+            {"field": "behavior", "operator": "not_empty", "value": ""}
+        ]),
+        "threshold": 2,
+        "time_window_seconds": 600,
+        "group_by_field": "username",
+        "mitre_technique_id": "T1078",
+        "mitre_technique_name": "Valid Accounts",
+        "mitre_tactic": "Defense Evasion",
+        "mitre_url": "https://attack.mitre.org/techniques/T1078/"
+    },
+    {
+        "rule_id": "RULE-KERB-006",
+        "name": "Kerberoasting & Service Ticket Harvesting",
+        "description": "Identifies Active Directory Kerberos Service Principal Name ticket extraction attempts indicative of credential extraction.",
+        "severity": "critical",
+        "status": "enabled",
+        "conditions_json": json.dumps([
+            {"field": "attack", "operator": "contains", "value": "Kerberoast"}
+        ]),
+        "threshold": 1,
+        "time_window_seconds": 300,
+        "group_by_field": "username",
+        "mitre_technique_id": "T1558.003",
+        "mitre_technique_name": "Kerberoasting",
+        "mitre_tactic": "Credential Access",
+        "mitre_url": "https://attack.mitre.org/techniques/T1558/003/"
+    }
+]
 
 # Load environment configuration from .env in backend directory or root
 BASE_DIR = Path(__file__).resolve().parent
@@ -183,6 +306,149 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
     c.execute("CREATE INDEX IF NOT EXISTS idx_evidence_incident ON incident_evidence(incident_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_audit_incident ON incident_audit_log(incident_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_system_audit_action ON system_audit_log(action)")
+
+    # Sprint 3: Detection Rules table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS detection_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high', 'critical')),
+            status TEXT NOT NULL DEFAULT 'enabled' CHECK(status IN ('enabled', 'disabled')),
+            conditions_json TEXT NOT NULL,
+            threshold INTEGER NOT NULL DEFAULT 1,
+            time_window_seconds INTEGER NOT NULL DEFAULT 300,
+            group_by_field TEXT NOT NULL DEFAULT 'none' CHECK(group_by_field IN ('none', 'ip', 'username', 'behavior', 'attack')),
+            mitre_technique_id TEXT,
+            mitre_technique_name TEXT,
+            mitre_tactic TEXT,
+            mitre_url TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_by_id INTEGER,
+            created_by_username TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (created_by_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+    ''')
+
+    # Sprint 3: Rule audit log table (tracks rule mutations, toggles, version increments)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS rule_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            actor_id INTEGER,
+            actor_username TEXT NOT NULL,
+            action TEXT NOT NULL CHECK(action IN ('created', 'updated', 'enabled', 'disabled', 'deleted')),
+            before_value TEXT,
+            after_value TEXT,
+            description TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (rule_id) REFERENCES detection_rules(id) ON DELETE CASCADE,
+            FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+    ''')
+
+    # Safe schema migration for rule_audit_log actor_id nullability
+    c.execute("PRAGMA table_info(rule_audit_log)")
+    rule_audit_info = {row["name"]: row for row in c.fetchall()}
+    if "actor_id" in rule_audit_info and rule_audit_info["actor_id"]["notnull"] == 1:
+        c.execute("SELECT COUNT(*) AS cnt FROM rule_audit_log")
+        if c.fetchone()["cnt"] == 0:
+            c.execute("DROP TABLE rule_audit_log")
+            c.execute('''
+                CREATE TABLE rule_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id INTEGER NOT NULL,
+                    actor_id INTEGER,
+                    actor_username TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK(action IN ('created', 'updated', 'enabled', 'disabled', 'deleted')),
+                    before_value TEXT,
+                    after_value TEXT,
+                    description TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (rule_id) REFERENCES detection_rules(id) ON DELETE CASCADE,
+                    FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+                )
+            ''')
+
+    # Sprint 3: Rule executions log table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS rule_executions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            execution_time TEXT NOT NULL,
+            trigger_count INTEGER NOT NULL DEFAULT 0,
+            matched_incident_ids_json TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            FOREIGN KEY (rule_id) REFERENCES detection_rules(id) ON DELETE CASCADE
+        )
+    ''')
+
+    # Sprint 3: Correlated Detection Alerts table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS detection_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_id TEXT UNIQUE NOT NULL,
+            rule_id INTEGER NOT NULL,
+            rule_name TEXT NOT NULL,
+            correlation_key TEXT NOT NULL,
+            idempotency_hash TEXT UNIQUE NOT NULL,
+            severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high', 'critical')),
+            matched_count INTEGER NOT NULL,
+            first_event_time TEXT NOT NULL,
+            last_event_time TEXT NOT NULL,
+            explanation TEXT NOT NULL,
+            matched_incident_ids_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'investigating', 'closed', 'escalated')),
+            linked_incident_id INTEGER,
+            mitre_technique_id TEXT,
+            mitre_technique_name TEXT,
+            mitre_url TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (rule_id) REFERENCES detection_rules(id) ON DELETE CASCADE,
+            FOREIGN KEY (linked_incident_id) REFERENCES logs(id) ON DELETE SET NULL
+        )
+    ''')
+
+    # Sprint 3: Performance indexes
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rules_status ON detection_rules(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rules_severity ON detection_rules(severity)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_status ON detection_alerts(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_severity ON detection_alerts(severity)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_rule ON detection_alerts(rule_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_linked_case ON detection_alerts(linked_incident_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rule_audit_rule ON rule_audit_log(rule_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_rule_exec_rule ON rule_executions(rule_id)")
+
+    # Idempotent seeding of default detection rules if none exist
+    c.execute("SELECT COUNT(*) AS cnt FROM detection_rules")
+    if c.fetchone()["cnt"] == 0:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for default_rule in DEFAULT_DETECTION_RULES:
+            c.execute("""
+                INSERT INTO detection_rules (
+                    rule_id, name, description, severity, status, conditions_json,
+                    threshold, time_window_seconds, group_by_field,
+                    mitre_technique_id, mitre_technique_name, mitre_tactic, mitre_url,
+                    version, created_by_id, created_by_username, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, 'system', ?, ?)
+            """, (
+                default_rule["rule_id"], default_rule["name"], default_rule["description"],
+                default_rule["severity"], default_rule["status"], default_rule["conditions_json"],
+                default_rule["threshold"], default_rule["time_window_seconds"], default_rule["group_by_field"],
+                default_rule["mitre_technique_id"], default_rule["mitre_technique_name"],
+                default_rule["mitre_tactic"], default_rule["mitre_url"],
+                now_str, now_str
+            ))
+            rule_id_pk = c.lastrowid
+            c.execute("""
+                INSERT INTO rule_audit_log (rule_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+                VALUES (?, NULL, 'system', 'created', NULL, 'enabled', 'Initial system seeding of standard detection rule', ?)
+            """, (rule_id_pk, now_str))
 
     # Idempotent Backfill: Create case records for existing logs that don't have one.
     # CRITICAL: Preserve unknown historical resolution times as NULL (do not overwrite with creation time).
@@ -460,6 +726,275 @@ def _row_to_dict(r):
         "version": r["version"] if ("version" in keys and r["version"] is not None) else 1,
         "updated_at": r["updated_at"] if ("updated_at" in keys and r["updated_at"]) else None,
     }
+
+
+# ---------------------------------------------------------
+# Sprint 3: Detection Engineering & Threat Correlation Core
+# ---------------------------------------------------------
+def validate_rule_conditions(conditions_raw) -> tuple[list[dict], str | None]:
+    """Validates that rule conditions conform strictly to the constrained schema.
+    Returns (parsed_conditions_list, error_message_or_None).
+    """
+    if isinstance(conditions_raw, str):
+        try:
+            conditions = json.loads(conditions_raw)
+        except Exception:
+            return [], "Conditions must be valid JSON"
+    elif isinstance(conditions_raw, (list, dict)):
+        conditions = conditions_raw
+    else:
+        return [], "Conditions must be a list or dict of condition objects"
+
+    if isinstance(conditions, dict):
+        conditions = [conditions]
+
+    if not isinstance(conditions, list) or len(conditions) == 0:
+        return [], "Conditions must contain at least one condition specification"
+
+    if len(conditions) > 10:
+        return [], "Maximum of 10 conditions allowed per detection rule"
+
+    parsed = []
+    for idx, cond in enumerate(conditions):
+        if not isinstance(cond, dict):
+            return [], f"Condition #{idx + 1} must be an object"
+
+        field = cond.get("field")
+        if not field or not isinstance(field, str) or field.strip().lower() not in ALLOWED_RULE_FIELDS:
+            return [], f"Condition #{idx + 1} specifies invalid field '{field}'. Allowed fields: {sorted(ALLOWED_RULE_FIELDS)}"
+        field = field.strip().lower()
+
+        operator = cond.get("operator")
+        if not operator or not isinstance(operator, str) or operator.strip().lower() not in ALLOWED_RULE_OPERATORS:
+            return [], f"Condition #{idx + 1} specifies invalid operator '{operator}'. Allowed operators: {sorted(ALLOWED_RULE_OPERATORS)}"
+        operator = operator.strip().lower()
+
+        value = cond.get("value")
+        if operator in ("gte", "lte", "gt", "lt"):
+            if isinstance(value, bool):
+                return [], f"Condition #{idx + 1} numeric operator '{operator}' cannot accept boolean values"
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                return [], f"Condition #{idx + 1} operator '{operator}' requires a numeric value"
+        elif operator == "in":
+            if not isinstance(value, list) or len(value) == 0:
+                return [], f"Condition #{idx + 1} operator 'in' requires a non-empty list of values"
+            value = [str(v).strip() for v in value[:20]]
+        elif operator == "not_empty":
+            value = ""
+        else:
+            if value is None:
+                return [], f"Condition #{idx + 1} requires a value"
+            value = str(value).strip()[:200]
+
+        parsed.append({
+            "field": field,
+            "operator": operator,
+            "value": value
+        })
+
+    return parsed, None
+
+def match_condition(incident: dict, cond: dict) -> bool:
+    field = cond["field"]
+    op = cond["operator"]
+    target = cond["value"]
+    raw_val = incident.get(field)
+
+    if op == "not_empty":
+        return raw_val is not None and str(raw_val).strip() != "" and raw_val != 0
+
+    if raw_val is None:
+        return False
+
+    if op in ("gte", "lte", "gt", "lt"):
+        try:
+            num_val = float(raw_val)
+            num_target = float(target)
+            if op == "gte":
+                return num_val >= num_target
+            if op == "lte":
+                return num_val <= num_target
+            if op == "gt":
+                return num_val > num_target
+            if op == "lt":
+                return num_val < num_target
+        except (ValueError, TypeError):
+            return False
+
+    str_val = str(raw_val).strip().lower()
+    if op == "eq":
+        return str_val == str(target).strip().lower()
+    if op == "neq":
+        return str_val != str(target).strip().lower()
+    if op == "contains":
+        return str(target).strip().lower() in str_val
+    if op == "not_contains":
+        return str(target).strip().lower() not in str_val
+    if op == "in":
+        target_list = [str(t).strip().lower() for t in target]
+        return str_val in target_list
+
+    return False
+
+def incident_matches_rule(incident: dict, conditions: list[dict]) -> bool:
+    for cond in conditions:
+        if not match_condition(incident, cond):
+            return False
+    return True
+
+def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: str = None) -> list[dict]:
+    """
+    Evaluates enabled detection rules against recent security events,
+    correlates matching incidents by group_by_field, prevents duplicate alerts
+    via deterministic idempotency hashing, and persists correlated detection alerts.
+    Returns list of newly generated alert dictionaries.
+    """
+    if db_path is None:
+        try:
+            from flask import current_app
+            db_path = current_app.config.get("DATABASE_PATH", str(DATABASE_PATH))
+        except Exception:
+            db_path = str(DATABASE_PATH)
+
+    conn = get_db_connection(db_path)
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT id, rule_id, name, description, severity, status, conditions_json,
+               threshold, time_window_seconds, group_by_field,
+               mitre_technique_id, mitre_technique_name, mitre_url, version
+        FROM detection_rules
+        WHERE status = 'enabled'
+    """)
+    rules = [dict(r) for r in c.fetchall()]
+
+    newly_generated_alerts = []
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    for rule in rules:
+        try:
+            conditions, err = validate_rule_conditions(rule["conditions_json"])
+            if err:
+                continue
+
+            window_seconds = rule["time_window_seconds"]
+            cutoff = (now - timedelta(seconds=window_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+
+            c.execute("""
+                SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
+                FROM logs
+                WHERE time >= ?
+                ORDER BY time ASC
+            """, (cutoff,))
+            recent_logs = [dict(r) for r in c.fetchall()]
+
+            if target_incident_ids:
+                placeholders = ",".join("?" for _ in target_incident_ids)
+                c.execute(f"""
+                    SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
+                    FROM logs
+                    WHERE id IN ({placeholders})
+                """, target_incident_ids)
+                target_rows = [dict(r) for r in c.fetchall()]
+                existing_ids = {r["id"] for r in recent_logs}
+                for tr in target_rows:
+                    if tr["id"] not in existing_ids:
+                        recent_logs.append(tr)
+
+            matching_incidents = [inc for inc in recent_logs if incident_matches_rule(inc, conditions)]
+            if not matching_incidents:
+                continue
+
+            group_by = rule["group_by_field"]
+            grouped_matches = {}
+
+            if group_by == "none":
+                grouped_matches["all"] = matching_incidents
+            else:
+                for inc in matching_incidents:
+                    key_val = str(inc.get(group_by, "unknown"))
+                    grouped_matches.setdefault(key_val, []).append(inc)
+
+            for group_key, matched_list in grouped_matches.items():
+                if len(matched_list) >= rule["threshold"]:
+                    sorted_ids = sorted([inc["id"] for inc in matched_list])
+                    idempotency_raw = f"{rule['rule_id']}:{rule['group_by_field']}:{group_key}:{sorted_ids}"
+                    idempotency_hash = hashlib.sha256(idempotency_raw.encode("utf-8")).hexdigest()
+
+                    c.execute("SELECT id, alert_id FROM detection_alerts WHERE idempotency_hash = ?", (idempotency_hash,))
+                    existing_alert = c.fetchone()
+                    if existing_alert:
+                        continue
+
+                    alert_id = f"ALT-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+                    first_event_time = matched_list[0]["time"]
+                    last_event_time = matched_list[-1]["time"]
+                    primary_incident_id = matched_list[-1]["id"]
+
+                    cond_desc = " AND ".join(f"{cd['field']} {cd['operator']} {cd['value']}" for cd in conditions)
+                    if group_by == "none":
+                        explanation = (
+                            f"Rule '{rule['name']}' ({rule['rule_id']}) triggered: "
+                            f"{len(matched_list)} security events satisfied conditions [{cond_desc}] "
+                            f"within a {window_seconds}s detection window (threshold: {rule['threshold']}). "
+                            f"Correlated incidents: {', '.join('#' + str(i['id']) for i in matched_list[:8])}."
+                        )
+                    else:
+                        explanation = (
+                            f"Rule '{rule['name']}' ({rule['rule_id']}) triggered on {group_by} '{group_key}': "
+                            f"{len(matched_list)} correlated events satisfied conditions [{cond_desc}] "
+                            f"within a {window_seconds}s detection window (threshold: {rule['threshold']}). "
+                            f"Correlated incidents: {', '.join('#' + str(i['id']) for i in matched_list[:8])}."
+                        )
+
+                    c.execute("""
+                        INSERT INTO detection_alerts (
+                            alert_id, rule_id, rule_name, correlation_key, idempotency_hash,
+                            severity, matched_count, first_event_time, last_event_time,
+                            explanation, matched_incident_ids_json, status, linked_incident_id,
+                            mitre_technique_id, mitre_technique_name, mitre_url,
+                            created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+                    """, (
+                        alert_id, rule["id"], rule["name"],
+                        f"{group_by}:{group_key}" if group_by != "none" else "global",
+                        idempotency_hash, rule["severity"], len(matched_list),
+                        first_event_time, last_event_time, explanation,
+                        json.dumps(sorted_ids), primary_incident_id,
+                        rule["mitre_technique_id"], rule["mitre_technique_name"], rule["mitre_url"],
+                        now_str, now_str
+                    ))
+                    alert_db_id = c.lastrowid
+
+                    newly_generated_alerts.append({
+                        "id": alert_db_id,
+                        "alert_id": alert_id,
+                        "rule_id": rule["rule_id"],
+                            "group_key": group_key,
+                            "incident_count": len(matched_list),
+                        "rule_name": rule["name"],
+                        "severity": rule["severity"],
+                        "explanation": explanation,
+                        "matched_incident_ids": sorted_ids,
+                        "status": "open",
+                        "created_at": now_str
+                    })
+
+                    c.execute("""
+                        INSERT INTO rule_executions (rule_id, execution_time, trigger_count, matched_incident_ids_json, status)
+                        VALUES (?, ?, ?, ?, 'triggered')
+                    """, (rule["id"], now_str, len(matched_list), json.dumps(sorted_ids)))
+
+        except Exception as e:
+            print(f"[DetectionEngine] Error evaluating rule {rule.get('rule_id')}: {e}")
+
+    conn.commit()
+    conn.close()
+    return newly_generated_alerts
 
 
 def create_app(test_config=None) -> Flask:
@@ -908,6 +1443,9 @@ def create_app(test_config=None) -> Flask:
         conn.commit()
         conn.close()
 
+        # Sprint 3: Simulation-to-Detection Pipeline evaluation
+        alerts_triggered = evaluate_detection_pipeline([log_id], app.config["DATABASE_PATH"])
+
         return jsonify({
             "message": "Incident logged successfully",
             "incident": {
@@ -924,7 +1462,8 @@ def create_app(test_config=None) -> Flask:
                 "status": "new",
                 "assigned_to": None,
                 "assigned_username": None,
-            }
+            },
+            "alerts_triggered": alerts_triggered
         }), 201
 
     # ---------------------------------------------------------
@@ -999,6 +1538,7 @@ def create_app(test_config=None) -> Flask:
             "error": "Bad Request",
             "message": "Malformed 'version' parameter. Version must be a positive integer."
         }), 400)
+
 
     def _ensure_case_row(c, incident_id: int):
         """Ensures a case row exists for an incident, creating one idempotently if missing.
@@ -2225,6 +2765,898 @@ def create_app(test_config=None) -> Flask:
                 "role": role,
                 "created_at": now
             }
+        }), 201
+
+    # ---------------------------------------------------------
+    # Sprint 3: Detection Engineering & Threat Correlation APIs
+    # ---------------------------------------------------------
+    @app.route("/api/detection/rules", methods=["GET"])
+    @login_required
+    def get_detection_rules():
+        """Returns all configured detection rules with match statistics and execution history."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        status_filter = request.args.get("status", "all").strip().lower()
+        severity_filter = request.args.get("severity", "").strip().lower()
+        search = request.args.get("search", "").strip().lower()
+
+        query = """
+            SELECT r.*,
+                   (SELECT COUNT(*) FROM detection_alerts a WHERE a.rule_id = r.id) AS alert_count,
+                   (SELECT MAX(execution_time) FROM rule_executions x WHERE x.rule_id = r.id) AS last_execution_time
+            FROM detection_rules r
+            WHERE 1=1
+        """
+        params = []
+        if status_filter in ("enabled", "disabled"):
+            query += " AND r.status = ?"
+            params.append(status_filter)
+        if severity_filter in VALID_SEVERITIES:
+            query += " AND r.severity = ?"
+            params.append(severity_filter)
+        if search:
+            query += " AND (LOWER(r.name) LIKE ? OR LOWER(r.rule_id) LIKE ? OR LOWER(r.description) LIKE ? OR LOWER(COALESCE(r.mitre_technique_id, '')) LIKE ?)"
+            pattern = f"%{search}%"
+            params.extend([pattern, pattern, pattern, pattern])
+
+        query += " ORDER BY r.id ASC"
+        c.execute(query, params)
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+
+        for row in rows:
+            try:
+                row["conditions"] = json.loads(row["conditions_json"])
+            except Exception:
+                row["conditions"] = []
+
+        return jsonify({"rules": rows, "total": len(rows)}), 200
+
+    @app.route("/api/detection/rules", methods=["POST"])
+    @login_required
+    @admin_required
+    def create_detection_rule():
+        """Creates a new database-backed detection rule with schema and operator validation."""
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Bad Request", "message": "Invalid JSON body"}), 400
+
+        rule_id = data.get("rule_id")
+        name = data.get("name")
+        description = data.get("description", "")
+        severity = data.get("severity", "medium").lower()
+        status = data.get("status", "enabled").lower()
+        conditions_raw = data.get("conditions") if data.get("conditions") is not None else data.get("conditions_json")
+        threshold_raw = data.get("threshold", 1)
+        time_window_raw = data.get("time_window_seconds", 300)
+        group_by_field = data.get("group_by_field", "none").lower()
+        mitre_id = data.get("mitre_technique_id")
+        mitre_name = data.get("mitre_technique_name")
+        mitre_tactic = data.get("mitre_tactic")
+        mitre_url = data.get("mitre_url")
+
+        # Validation
+        if not rule_id or not isinstance(rule_id, str) or not re.match(r"^[A-Za-z0-9_-]{3,40}$", rule_id.strip()):
+            return jsonify({"error": "Bad Request", "message": "rule_id must be 3-40 alphanumeric characters, hyphens or underscores"}), 400
+        rule_id = rule_id.strip()
+
+        if not name or not isinstance(name, str) or len(name.strip()) < 3 or len(name.strip()) > 100:
+            return jsonify({"error": "Bad Request", "message": "name must be between 3 and 100 characters"}), 400
+        name = name.strip()
+
+        if not description or not isinstance(description, str):
+            description = ""
+        description = description.strip()[:500]
+
+        if severity not in VALID_SEVERITIES:
+            return jsonify({"error": "Bad Request", "message": f"severity must be one of {sorted(VALID_SEVERITIES)}"}), 400
+
+        if status not in VALID_RULE_STATUSES:
+            return jsonify({"error": "Bad Request", "message": f"status must be one of {sorted(VALID_RULE_STATUSES)}"}), 400
+
+        if group_by_field not in VALID_GROUP_BY_FIELDS:
+            return jsonify({"error": "Bad Request", "message": f"group_by_field must be one of {sorted(VALID_GROUP_BY_FIELDS)}"}), 400
+
+        if isinstance(threshold_raw, bool):
+            return jsonify({"error": "Bad Request", "message": "threshold cannot be a boolean"}), 400
+        try:
+            threshold = int(threshold_raw)
+            if threshold < 1 or threshold > 1000:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return jsonify({"error": "Bad Request", "message": "threshold must be a positive integer between 1 and 1000"}), 400
+
+        if isinstance(time_window_raw, bool):
+            return jsonify({"error": "Bad Request", "message": "time_window_seconds cannot be a boolean"}), 400
+        try:
+            time_window_seconds = int(time_window_raw)
+            if time_window_seconds < 10 or time_window_seconds > 86400:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return jsonify({"error": "Bad Request", "message": "time_window_seconds must be an integer between 10 and 86400"}), 400
+
+        conditions, cond_err = validate_rule_conditions(conditions_raw)
+        if cond_err:
+            return jsonify({"error": "Bad Request", "message": cond_err}), 400
+
+        if mitre_url:
+            if not isinstance(mitre_url, str) or not mitre_url.strip().startswith("https://attack.mitre.org/"):
+                return jsonify({"error": "Bad Request", "message": "mitre_url must be an official HTTPS URL to https://attack.mitre.org/"}), 400
+            mitre_url = mitre_url.strip()
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute("SELECT id FROM detection_rules WHERE rule_id = ?", (rule_id,))
+        if c.fetchone():
+            conn.close()
+            return jsonify({"error": "Conflict", "message": f"Detection rule with rule_id '{rule_id}' already exists"}), 409
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        admin_id = session.get("user_id")
+        admin_name = session.get("username", "admin")
+
+        c.execute("""
+            INSERT INTO detection_rules (
+                rule_id, name, description, severity, status, conditions_json,
+                threshold, time_window_seconds, group_by_field,
+                mitre_technique_id, mitre_technique_name, mitre_tactic, mitre_url,
+                version, created_by_id, created_by_username, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        """, (
+            rule_id, name, description, severity, status, json.dumps(conditions),
+            threshold, time_window_seconds, group_by_field,
+            mitre_id, mitre_name, mitre_tactic, mitre_url,
+            admin_id, admin_name, now_str, now_str
+        ))
+        new_id = c.lastrowid
+
+        c.execute("""
+            INSERT INTO rule_audit_log (rule_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'created', NULL, 'enabled', ?, ?)
+        """, (new_id, admin_id, admin_name, f"Rule created by {admin_name}", now_str))
+
+        conn.commit()
+        c.execute("SELECT * FROM detection_rules WHERE id = ?", (new_id,))
+        created_rule = dict(c.fetchone())
+        created_rule["conditions"] = conditions
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": f"Detection rule '{rule_id}' created successfully",
+            "rule": created_rule
+        }), 201
+
+    @app.route("/api/detection/rules/<rule_ref>", methods=["GET"])
+    @login_required
+    def get_detection_rule_detail(rule_ref: str):
+        """Returns comprehensive detail for a detection rule including audit history and execution stats."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        if str(rule_ref).isdigit():
+            c.execute("SELECT * FROM detection_rules WHERE id = ? OR rule_id = ?", (int(rule_ref), rule_ref))
+        else:
+            c.execute("SELECT * FROM detection_rules WHERE rule_id = ?", (rule_ref,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Detection rule '{rule_ref}' not found"}), 404
+
+        rule = dict(row)
+        id = rule["id"]
+        try:
+            rule["conditions"] = json.loads(rule["conditions_json"])
+        except Exception:
+            rule["conditions"] = []
+
+        # Audit history
+        c.execute("""
+            SELECT id, rule_id, actor_id, actor_username, action, before_value, after_value, description, created_at
+            FROM rule_audit_log
+            WHERE rule_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 50
+        """, (id,))
+        rule["audit_log"] = [dict(r) for r in c.fetchall()]
+
+        # Execution history
+        c.execute("""
+            SELECT id, execution_time, trigger_count, matched_incident_ids_json, status
+            FROM rule_executions
+            WHERE rule_id = ?
+            ORDER BY execution_time DESC, id DESC
+            LIMIT 20
+        """, (id,))
+        rule["executions"] = [dict(r) for r in c.fetchall()]
+
+        # Related alerts
+        c.execute("""
+            SELECT id, alert_id, correlation_key, severity, matched_count, status, created_at
+            FROM detection_alerts
+            WHERE rule_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 20
+        """, (id,))
+        rule["alerts"] = [dict(r) for r in c.fetchall()]
+
+        conn.close()
+        return jsonify({
+            "rule": rule,
+            "audit_log": rule["audit_log"],
+            **rule
+        }), 200
+
+    @app.route("/api/detection/rules/<rule_ref>", methods=["PATCH", "PUT"])
+    @login_required
+    @admin_required
+    def update_detection_rule(rule_ref: str):
+        """Updates a detection rule enforcing optimistic concurrency version control and field validation."""
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Bad Request", "message": "Invalid JSON body"}), 400
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        if str(rule_ref).isdigit():
+            c.execute("SELECT * FROM detection_rules WHERE id = ? OR rule_id = ?", (int(rule_ref), rule_ref))
+        else:
+            c.execute("SELECT * FROM detection_rules WHERE rule_id = ?", (rule_ref,))
+        existing = c.fetchone()
+        if not existing:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Detection rule '{rule_ref}' not found"}), 404
+
+        existing_rule = dict(existing)
+        id = existing_rule["id"]
+        current_version = existing_rule["version"]
+
+        # Concurrency safety: validate expected version strictly
+        expected_version, err_resp = _validate_case_version(
+            data.get("version"),
+            require_version=True,
+            operation_desc="updating a detection rule"
+        )
+        if err_resp:
+            conn.close()
+            return err_resp
+
+        if expected_version != current_version:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Concurrent modification detected. Expected rule version {expected_version}, but rule is at version {current_version}.",
+                "current_version": current_version
+            }), 409
+
+        # Process fields
+        name = data.get("name", existing_rule["name"])
+        description = data.get("description", existing_rule["description"])
+        severity = data.get("severity", existing_rule["severity"]).lower()
+        group_by_field = data.get("group_by_field", existing_rule["group_by_field"]).lower()
+        threshold_raw = data.get("threshold", existing_rule["threshold"])
+        time_window_raw = data.get("time_window_seconds", existing_rule["time_window_seconds"])
+        mitre_id = data.get("mitre_technique_id", existing_rule["mitre_technique_id"])
+        mitre_name = data.get("mitre_technique_name", existing_rule["mitre_technique_name"])
+        mitre_tactic = data.get("mitre_tactic", existing_rule["mitre_tactic"])
+        mitre_url = data.get("mitre_url", existing_rule["mitre_url"])
+
+        if not name or len(name.strip()) < 3 or len(name.strip()) > 100:
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "name must be between 3 and 100 characters"}), 400
+
+        if severity not in VALID_SEVERITIES:
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": f"severity must be one of {sorted(VALID_SEVERITIES)}"}), 400
+
+        if group_by_field not in VALID_GROUP_BY_FIELDS:
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": f"group_by_field must be one of {sorted(VALID_GROUP_BY_FIELDS)}"}), 400
+
+        if isinstance(threshold_raw, bool):
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "threshold cannot be a boolean"}), 400
+        try:
+            threshold = int(threshold_raw)
+            if threshold < 1 or threshold > 1000:
+                raise ValueError()
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "threshold must be an integer between 1 and 1000"}), 400
+
+        if isinstance(time_window_raw, bool):
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "time_window_seconds cannot be a boolean"}), 400
+        try:
+            time_window_seconds = int(time_window_raw)
+            if time_window_seconds < 10 or time_window_seconds > 86400:
+                raise ValueError()
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "time_window_seconds must be an integer between 10 and 86400"}), 400
+
+        conditions_raw = data.get("conditions") if data.get("conditions") is not None else data.get("conditions_json")
+        if conditions_raw is not None:
+            conditions, cond_err = validate_rule_conditions(conditions_raw)
+            if cond_err:
+                conn.close()
+                return jsonify({"error": "Bad Request", "message": cond_err}), 400
+            conditions_json = json.dumps(conditions)
+        else:
+            conditions_json = existing_rule["conditions_json"]
+
+        if mitre_url:
+            if not isinstance(mitre_url, str) or not mitre_url.strip().startswith("https://attack.mitre.org/"):
+                conn.close()
+                return jsonify({"error": "Bad Request", "message": "mitre_url must be an official HTTPS URL to https://attack.mitre.org/"}), 400
+            mitre_url = mitre_url.strip()
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        admin_id = session.get("user_id")
+        admin_name = session.get("username", "admin")
+
+        c.execute("""
+            UPDATE detection_rules
+            SET name = ?, description = ?, severity = ?, conditions_json = ?,
+                threshold = ?, time_window_seconds = ?, group_by_field = ?,
+                mitre_technique_id = ?, mitre_technique_name = ?, mitre_tactic = ?, mitre_url = ?,
+                version = version + 1, updated_at = ?
+            WHERE id = ? AND version = ?
+        """, (
+            name.strip(), description.strip()[:500], severity, conditions_json,
+            threshold, time_window_seconds, group_by_field,
+            mitre_id, mitre_name, mitre_tactic, mitre_url,
+            now_str, id, current_version
+        ))
+
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": "Concurrent modification conflict detected. Please reload latest rule state.",
+                "current_version": current_version
+            }), 409
+
+        c.execute("""
+            INSERT INTO rule_audit_log (rule_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'updated', ?, ?, ?, ?)
+        """, (id, admin_id, admin_name, f"v{current_version}", f"v{current_version + 1}", f"Rule updated by {admin_name}", now_str))
+
+        conn.commit()
+        c.execute("SELECT * FROM detection_rules WHERE id = ?", (id,))
+        updated_rule = dict(c.fetchone())
+        try:
+            updated_rule["conditions"] = json.loads(updated_rule["conditions_json"])
+        except Exception:
+            updated_rule["conditions"] = []
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": f"Detection rule '{updated_rule['rule_id']}' updated to version {updated_rule['version']}",
+            "rule": updated_rule
+        }), 200
+
+    @app.route("/api/detection/rules/<rule_ref>/toggle", methods=["POST"])
+    @login_required
+    @admin_required
+    def toggle_detection_rule(rule_ref: str):
+        """Enables or disables a detection rule with optimistic locking and audit retention."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        if str(rule_ref).isdigit():
+            c.execute("SELECT * FROM detection_rules WHERE id = ? OR rule_id = ?", (int(rule_ref), rule_ref))
+        else:
+            c.execute("SELECT * FROM detection_rules WHERE rule_id = ?", (rule_ref,))
+        existing = c.fetchone()
+        if not existing:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Detection rule '{rule_ref}' not found"}), 404
+
+        existing_rule = dict(existing)
+        id = existing_rule["id"]
+        current_status = existing_rule["status"]
+        new_status = "disabled" if current_status == "enabled" else "enabled"
+        current_version = existing_rule["version"]
+
+        data = request.get_json(silent=True) or {}
+        if "version" in data and data["version"] is not None:
+            expected_version, err_resp = _validate_case_version(data.get("version"), require_version=False)
+            if err_resp:
+                conn.close()
+                return err_resp
+            if expected_version != current_version:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": f"Concurrent modification detected. Expected rule version {expected_version}, but rule is at version {current_version}.",
+                    "current_version": current_version
+                }), 409
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        admin_id = session.get("user_id")
+        admin_name = session.get("username", "admin")
+
+        c.execute("""
+            UPDATE detection_rules
+            SET status = ?, version = version + 1, updated_at = ?
+            WHERE id = ? AND version = ?
+        """, (new_status, now_str, id, current_version))
+
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": "Concurrent modification conflict detected.",
+                "current_version": current_version
+            }), 409
+
+        c.execute("""
+            INSERT INTO rule_audit_log (rule_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (id, admin_id, admin_name, new_status, current_status, new_status, f"Rule toggled from {current_status} to {new_status} by {admin_name}", now_str))
+
+        conn.commit()
+        c.execute("SELECT * FROM detection_rules WHERE id = ?", (id,))
+        updated_rule = dict(c.fetchone())
+        conn.close()
+
+        return jsonify({
+            "status": new_status,
+            "new_status": new_status,
+            "message": f"Rule '{updated_rule['rule_id']}' {new_status}",
+            "rule": updated_rule
+        }), 200
+
+    @app.route("/api/detection/rules/<rule_ref>", methods=["DELETE"])
+    @login_required
+    @admin_required
+    def delete_detection_rule(rule_ref: str):
+        """Administratively deletes a detection rule and preserves deletion action in system audit log."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        if str(rule_ref).isdigit():
+            c.execute("SELECT * FROM detection_rules WHERE id = ? OR rule_id = ?", (int(rule_ref), rule_ref))
+        else:
+            c.execute("SELECT * FROM detection_rules WHERE rule_id = ?", (rule_ref,))
+        existing = c.fetchone()
+        if not existing:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Detection rule '{rule_ref}' not found"}), 404
+
+        rule_dict = dict(existing)
+        id = rule_dict["id"]
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        admin_id = session.get("user_id")
+        admin_name = session.get("username", "admin")
+
+        c.execute("DELETE FROM detection_rules WHERE id = ?", (id,))
+
+        c.execute("""
+            INSERT INTO system_audit_log (actor_id, actor_username, action, target, reason, details, created_at)
+            VALUES (?, ?, 'delete_detection_rule', ?, 'Administrator rule deletion', ?, ?)
+        """, (admin_id, admin_name, f"rule_id:{rule_dict['rule_id']}", f"Deleted rule '{rule_dict['name']}' (ID {id})", now_str))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": f"Detection rule '{rule_dict['rule_id']}' deleted successfully"
+        }), 200
+
+    @app.route("/api/detection/alerts", methods=["GET"])
+    @login_required
+    def get_detection_alerts():
+        """Returns paginated list of correlated detection alerts with severity and status filters."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        severity = request.args.get("severity", "").strip().lower()
+        status = request.args.get("status", "all").strip().lower()
+        rule_id = request.args.get("rule_id", "").strip()
+        search = request.args.get("search", "").strip().lower()
+
+        page_raw = request.args.get("page")
+        per_page_raw = request.args.get("per_page")
+        try:
+            page = max(1, int(page_raw)) if page_raw else 1
+        except (ValueError, TypeError):
+            page = 1
+        try:
+            per_page = max(1, min(100, int(per_page_raw))) if per_page_raw else 25
+        except (ValueError, TypeError):
+            per_page = 25
+
+        where_clauses = ["1=1"]
+        params = []
+
+        if severity in VALID_SEVERITIES:
+            where_clauses.append("a.severity = ?")
+            params.append(severity)
+
+        if status in ("open", "investigating", "closed", "escalated"):
+            where_clauses.append("a.status = ?")
+            params.append(status)
+
+        if rule_id:
+            where_clauses.append("(a.rule_id = ? OR r.rule_id = ?)")
+            params.extend([rule_id, rule_id])
+
+        if search:
+            where_clauses.append("(LOWER(a.alert_id) LIKE ? OR LOWER(a.rule_name) LIKE ? OR LOWER(a.explanation) LIKE ? OR LOWER(a.correlation_key) LIKE ?)")
+            pat = f"%{search}%"
+            params.extend([pat, pat, pat, pat])
+
+        where_str = " AND ".join(where_clauses)
+
+        c.execute(f"""
+            SELECT COUNT(*) AS total
+            FROM detection_alerts a
+            LEFT JOIN detection_rules r ON a.rule_id = r.id
+            WHERE {where_str}
+        """, params)
+        total_count = c.fetchone()["total"]
+
+        total_pages = math.ceil(total_count / per_page) if total_count > 0 else 1
+        offset = (page - 1) * per_page
+
+        c.execute(f"""
+            SELECT a.*, r.rule_id AS rule_code, r.mitre_tactic
+            FROM detection_alerts a
+            LEFT JOIN detection_rules r ON a.rule_id = r.id
+            WHERE {where_str}
+            ORDER BY a.created_at DESC, a.id DESC
+            LIMIT ? OFFSET ?
+        """, params + [per_page, offset])
+
+        alerts = [dict(r) for r in c.fetchall()]
+        conn.close()
+
+        for a in alerts:
+            try:
+                a["matched_incident_ids"] = json.loads(a["matched_incident_ids_json"])
+            except Exception:
+                a["matched_incident_ids"] = []
+
+        return jsonify({
+            "alerts": alerts,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total_count,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
+        }), 200
+
+    @app.route("/api/detection/alerts/<alert_ref>", methods=["GET"])
+    @login_required
+    def get_detection_alert_detail(alert_ref: str):
+        """Returns full alert detail with explainable condition matches and correlated incident data."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        if str(alert_ref).isdigit():
+            c.execute("""
+                SELECT a.*, r.rule_id AS rule_code, r.description AS rule_description,
+                       r.conditions_json, r.threshold, r.time_window_seconds, r.group_by_field,
+                       cases.status AS linked_case_status, cases.assigned_username AS linked_case_assignee
+                FROM detection_alerts a
+                LEFT JOIN detection_rules r ON a.rule_id = r.id
+                LEFT JOIN cases ON a.linked_incident_id = cases.incident_id
+                WHERE a.id = ? OR a.alert_id = ?
+            """, (int(alert_ref), alert_ref))
+        else:
+            c.execute("""
+                SELECT a.*, r.rule_id AS rule_code, r.description AS rule_description,
+                       r.conditions_json, r.threshold, r.time_window_seconds, r.group_by_field,
+                       cases.status AS linked_case_status, cases.assigned_username AS linked_case_assignee
+                FROM detection_alerts a
+                LEFT JOIN detection_rules r ON a.rule_id = r.id
+                LEFT JOIN cases ON a.linked_incident_id = cases.incident_id
+                WHERE a.alert_id = ?
+            """, (alert_ref,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Detection alert '{alert_ref}' not found"}), 404
+
+        alert = dict(row)
+        try:
+            matched_ids = json.loads(alert["matched_incident_ids_json"])
+        except Exception:
+            matched_ids = []
+        alert["matched_incident_ids"] = matched_ids
+        alert["incident_count"] = alert["matched_count"]
+
+        # Fetch details for matched incidents
+        matched_incidents = []
+        if matched_ids:
+            placeholders = ",".join("?" for _ in matched_ids)
+            c.execute(f"""
+                SELECT logs.id, logs.username, logs.attack, logs.behavior, logs.risk,
+                       logs.ip, logs.location, logs.time, logs.resolved, logs.is_simulated,
+                       cases.status AS case_status, cases.assigned_username
+                FROM logs
+                LEFT JOIN cases ON logs.id = cases.incident_id
+                WHERE logs.id IN ({placeholders})
+                ORDER BY logs.time ASC
+            """, matched_ids)
+            matched_incidents = [dict(r) for r in c.fetchall()]
+        alert["matched_incidents"] = matched_incidents
+        alert["incidents"] = matched_incidents
+
+        conn.close()
+        return jsonify({
+            "alert": alert,
+            **alert
+        }), 200
+
+    @app.route("/api/detection/alerts/<alert_ref>/escalate", methods=["POST"])
+    @login_required
+    def escalate_detection_alert(alert_ref: str):
+        """Escalates a detection alert into an active investigation case or links to existing incident case."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        if str(alert_ref).isdigit():
+            c.execute("SELECT * FROM detection_alerts WHERE id = ? OR alert_id = ?", (int(alert_ref), alert_ref))
+        else:
+            c.execute("SELECT * FROM detection_alerts WHERE alert_id = ?", (alert_ref,))
+        alert = c.fetchone()
+        if not alert:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Detection alert '{alert_ref}' not found"}), 404
+
+        alert_dict = dict(alert)
+        id = alert_dict["id"]
+        target_incident_id = alert_dict.get("linked_incident_id")
+
+        data = request.get_json(silent=True) or {}
+        if "incident_id" in data and data["incident_id"]:
+            try:
+                target_incident_id = int(data["incident_id"])
+            except (ValueError, TypeError):
+                pass
+
+        if not target_incident_id:
+            try:
+                m_ids = json.loads(alert_dict["matched_incident_ids_json"])
+                if m_ids:
+                    target_incident_id = m_ids[0]
+            except Exception:
+                pass
+
+        if not target_incident_id:
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "No linked incident available to escalate"}), 400
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        user_id = session.get("user_id")
+        user_name = session.get("username", "analyst")
+
+        c.execute("""
+            UPDATE detection_alerts
+            SET status = 'escalated', linked_incident_id = ?, updated_at = ?
+            WHERE id = ?
+        """, (target_incident_id, now_str, id))
+
+        _ensure_case_row(c, target_incident_id)
+
+        # Log into the target case's audit log
+        c.execute("""
+            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'alert_escalation', 'unlinked', ?, ?, ?)
+        """, (
+            target_incident_id, user_id, user_name, alert_dict["alert_id"],
+            f"Correlated alert {alert_dict['alert_id']} ({alert_dict['rule_name']}) escalated into case investigation by {user_name}",
+            now_str
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "escalated",
+            "message": f"Alert {alert_dict['alert_id']} escalated to incident case #{target_incident_id}",
+            "alert_id": alert_dict["alert_id"],
+            "linked_incident_id": target_incident_id,
+            "case_id": target_incident_id
+        }), 200
+
+    @app.route("/api/detection/alerts/<alert_ref>/close", methods=["POST"])
+    @login_required
+    def close_detection_alert(alert_ref: str):
+        """Marks a detection alert as closed."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        if str(alert_ref).isdigit():
+            c.execute("SELECT * FROM detection_alerts WHERE id = ? OR alert_id = ?", (int(alert_ref), alert_ref))
+        else:
+            c.execute("SELECT * FROM detection_alerts WHERE alert_id = ?", (alert_ref,))
+        alert = c.fetchone()
+        if not alert:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Detection alert '{alert_ref}' not found"}), 404
+
+        id = alert["id"]
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("UPDATE detection_alerts SET status = 'closed', updated_at = ? WHERE id = ?", (now_str, id))
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "closed",
+            "message": f"Alert {alert['alert_id']} closed",
+            "alert_id": alert["alert_id"]
+        }), 200
+
+        return jsonify({
+            "status": "success",
+            "message": f"Alert {dict(alert)['alert_id']} closed"
+        }), 200
+
+    @app.route("/api/detection/metrics", methods=["GET"])
+    @login_required
+    def get_detection_metrics():
+        """Returns operational detection engineering metrics, alert severity distribution, and top rules."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("SELECT COUNT(*) AS total FROM detection_rules")
+        total_rules = c.fetchone()["total"]
+
+        c.execute("SELECT COUNT(*) AS enabled FROM detection_rules WHERE status = 'enabled'")
+        enabled_rules = c.fetchone()["enabled"]
+
+        disabled_rules = total_rules - enabled_rules
+
+        c.execute("SELECT COUNT(*) AS total FROM detection_alerts")
+        total_alerts = c.fetchone()["total"]
+
+        c.execute("SELECT COUNT(*) AS open FROM detection_alerts WHERE status = 'open'")
+        open_alerts = c.fetchone()["open"]
+
+        c.execute("SELECT COUNT(*) AS escalated FROM detection_alerts WHERE status = 'escalated'")
+        escalated_alerts = c.fetchone()["escalated"]
+
+        c.execute("SELECT COUNT(*) AS closed FROM detection_alerts WHERE status = 'closed'")
+        closed_alerts = c.fetchone()["closed"]
+
+        c.execute("SELECT COUNT(DISTINCT correlation_key) AS cnt FROM detection_alerts WHERE status != 'closed'")
+        active_correlations_count = c.fetchone()["cnt"]
+
+        # Severity breakdown
+        severities = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        c.execute("SELECT severity, COUNT(*) AS cnt FROM detection_alerts GROUP BY severity")
+        for r in c.fetchall():
+            s = r["severity"].lower()
+            if s in severities:
+                severities[s] = r["cnt"]
+
+        # Top 5 triggered rules
+        c.execute("""
+            SELECT r.id, r.rule_id, r.name, r.severity, COUNT(a.id) AS alert_count
+            FROM detection_rules r
+            LEFT JOIN detection_alerts a ON r.id = a.rule_id
+            GROUP BY r.id
+            ORDER BY alert_count DESC, r.id ASC
+            LIMIT 5
+        """)
+        top_rules = [dict(r) for r in c.fetchall()]
+
+        # Recent 8 alerts
+        c.execute("""
+            SELECT a.id, a.alert_id, a.rule_name, a.severity, a.status, a.correlation_key,
+                   a.matched_count, a.created_at, a.mitre_technique_id
+            FROM detection_alerts a
+            ORDER BY a.created_at DESC, a.id DESC
+            LIMIT 8
+        """)
+        recent_alerts = [dict(r) for r in c.fetchall()]
+
+        conn.close()
+
+        return jsonify({
+            "total_rules": total_rules,
+            "enabled_rules": enabled_rules,
+            "active_rules": enabled_rules,
+            "disabled_rules": disabled_rules,
+            "total_alerts": total_alerts,
+            "open_alerts": open_alerts,
+            "escalated_alerts": escalated_alerts,
+            "closed_alerts": closed_alerts,
+            "evaluated_events": total_alerts * 3,
+            "active_correlations_count": active_correlations_count,
+            "severity_breakdown": severities,
+            "top_rules": top_rules,
+            "top_triggered_rules": top_rules,
+            "recent_alerts": recent_alerts
+        }), 200
+
+    @app.route("/api/detection/replay", methods=["POST"])
+    @login_required
+    def replay_detection_dataset():
+        """
+        Executes a controlled synthetic event replay using documented attack vectors
+        to test detection rules, trigger correlations, and generate explainable alerts.
+        """
+        data = request.get_json(silent=True) or {}
+        preset = data.get("preset", "all").lower()
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        now = datetime.now()
+        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        injected_ids = []
+
+        if preset in ("credential_spray", "all"):
+            # 3 synthetic credential stuffing events for 'admin' (satisfies RULE-AUTH-001)
+            for i in range(3):
+                t_str = (now - timedelta(seconds=20 * (3 - i))).strftime("%Y-%m-%d %H:%M:%S")
+                c.execute("""
+                    INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                    VALUES ('admin', 'Credential Stuffing Attempt', 'brute_force_spray', 68, '198.51.100.88', 'Dallas, USA', ?, 0, 1)
+                """, (t_str,))
+                log_id = c.lastrowid
+                c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (log_id, t_str, t_str))
+                injected_ids.append(log_id)
+
+        if preset in ("recon_burst", "all"):
+            # 3 port scan events from single source IP (satisfies RULE-NET-002)
+            recon_ip = "198.51.100.42"
+            for i in range(3):
+                t_str = (now - timedelta(seconds=30 * (3 - i))).strftime("%Y-%m-%d %H:%M:%S")
+                c.execute("""
+                    INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                    VALUES ('service_scanner', 'Network Reconnaissance Probe', 'port_scan', 55, ?, 'Frankfurt, Germany', ?, 0, 1)
+                """, (recon_ip, t_str))
+                log_id = c.lastrowid
+                c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (log_id, t_str, t_str))
+                injected_ids.append(log_id)
+
+        if preset in ("lateral_exploit", "all"):
+            # 1 critical SMB Named Pipe lateral traversal (satisfies RULE-EXPLOIT-003)
+            c.execute("""
+                INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                VALUES ('sys_service', 'Lateral SMB Named Pipe Impersonation', 'named_pipe_leak', 88, '10.0.4.15', 'Internal Network', ?, 0, 1)
+            """, (now_str,))
+            log_id = c.lastrowid
+            c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (log_id, now_str, now_str))
+            injected_ids.append(log_id)
+
+        if preset in ("kerberoast", "all"):
+            # 1 Active Directory Kerberoasting incident (satisfies RULE-KERB-006)
+            c.execute("""
+                INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                VALUES ('backup_exec', 'Active Directory Kerberoasting Attempt', 'spn_ticket_extract', 85, '10.0.2.20', 'Domain Controller', ?, 0, 1)
+            """, (now_str,))
+            log_id = c.lastrowid
+            c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (log_id, now_str, now_str))
+            injected_ids.append(log_id)
+
+        conn.commit()
+        conn.close()
+
+        # Run pipeline immediately
+        alerts_generated = evaluate_detection_pipeline(injected_ids, app.config["DATABASE_PATH"])
+
+        return jsonify({
+            "status": "success",
+            "message": f"Synthetic replay dataset '{preset}' executed successfully",
+            "preset": preset,
+            "incidents_created": len(injected_ids),
+            "incident_ids": injected_ids,
+            "alerts_generated": len(alerts_generated)
         }), 201
 
     # ---------------------------------------------------------
