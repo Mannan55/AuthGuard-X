@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>AuthGuard-X</title>
+<title>AuthGuard-X | SOC Security Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
@@ -17,57 +17,169 @@
 --warn:#ffd700;
 --safe:#00ff99;
 --glass:rgba(255,255,255,.06);
+--text:#ffffff;
+--muted:#94a3b8;
 }
 
 *{box-sizing:border-box}
 body{
 margin:0;
-font-family:Inter;
-color:#fff;
+font-family:'Inter', sans-serif;
+color:var(--text);
 background:#020617;
 overflow-x:hidden;
-transition:.4s;
+transition:background .4s, color .4s;
+min-height:100vh;
 }
 
 body.hacker{
 --accent:#22c55e;
-background:#000;
+--bg:#000000;
+background:#000000;
+font-family:'Courier New', Courier, monospace;
 }
 
 h1{
-font-family:Orbitron;
+font-family:'Orbitron', sans-serif;
 text-align:center;
 color:var(--accent);
-letter-spacing:2px;
+letter-spacing:3px;
+margin:10px 0 5px 0;
+text-transform:uppercase;
+text-shadow:0 0 15px rgba(0,247,255,.3);
+}
+
+.subtitle{
+text-align:center;
+color:var(--muted);
+font-size:.85rem;
+margin-bottom:25px;
+letter-spacing:1px;
 }
 
 .container{max-width:1400px;margin:auto;padding:20px}
 
+/* HEADER CONTROLS */
+.header-bar{
+display:flex;
+justify-content:space-between;
+align-items:center;
+margin-bottom:15px;
+}
+
+.sim-banner{
+background:rgba(250,204,21,.1);
+border:1px solid rgba(250,204,21,.3);
+color:#facc15;
+padding:8px 16px;
+border-radius:10px;
+font-size:.8rem;
+display:flex;
+align-items:center;
+gap:8px;
+margin-bottom:15px;
+}
+
+/* LOGIN */
 .login{
-max-width:420px;
-margin:100px auto;
+max-width:440px;
+margin:60px auto;
 background:var(--card);
 padding:35px;
 border-radius:18px;
+box-shadow:0 8px 32px rgba(0,0,0,.5);
+border:1px solid rgba(255,255,255,.08);
+}
+
+.demo-box{
+margin-bottom:20px;
+padding:14px;
+border-radius:12px;
+background:rgba(0,247,255,.08);
+font-size:.85rem;
+border:1px dashed rgba(0,247,255,.3);
+line-height:1.5;
 }
 
 input,button{
 width:100%;
-padding:14px;
+padding:13px;
 border-radius:10px;
-border:none;
-margin:10px 0;
+border:1px solid rgba(255,255,255,.12);
+margin:8px 0;
 background:var(--glass);
 color:#fff;
+font-size:.95rem;
+}
+
+input:focus{
+outline:none;
+border-color:var(--accent);
+box-shadow:0 0 10px rgba(0,247,255,.2);
 }
 
 button{
-background:linear-gradient(135deg,var(--accent),#3cf);
+background:linear-gradient(135deg,var(--accent),#0088cc);
+color:#020617;
 font-weight:700;
 cursor:pointer;
+border:none;
+transition:transform .15s, box-shadow .15s;
+}
+
+button:hover{
+transform:translateY(-1px);
+box-shadow:0 4px 15px rgba(0,247,255,.4);
+}
+
+button:active{
+transform:translateY(1px);
+}
+
+.btn-secondary{
+background:rgba(255,255,255,.08);
+color:#fff;
+border:1px solid rgba(255,255,255,.2);
+}
+.btn-secondary:hover{
+background:rgba(255,255,255,.16);
+box-shadow:none;
+}
+
+.btn-danger{
+background:linear-gradient(135deg, #ef4444, #b91c1c);
+color:#fff;
+}
+
+.btn-resolve{
+padding:5px 12px;
+font-size:.75rem;
+border-radius:6px;
+background:rgba(0,247,255,.15);
+color:var(--accent);
+border:1px solid var(--accent);
+cursor:pointer;
+width:auto;
+margin:0;
+}
+.btn-resolve:hover{
+background:var(--accent);
+color:#000;
 }
 
 .dashboard{display:none}
+
+.user-status-bar{
+display:flex;
+justify-content:space-between;
+align-items:center;
+background:var(--card);
+padding:12px 20px;
+border-radius:14px;
+margin-bottom:20px;
+border:1px solid rgba(255,255,255,.08);
+font-size:.85rem;
+}
 
 .cards{
 display:grid;
@@ -75,13 +187,24 @@ grid-template-columns:repeat(4,1fr);
 gap:20px;
 }
 
-/* ===== CARD CURSOR GLASS EFFECT ===== */
+/* ===== CARD GLASS HOVER ===== */
 .card{
 position:relative;
 background:var(--card);
 padding:22px;
 border-radius:18px;
 overflow:hidden;
+border:1px solid rgba(255,255,255,.06);
+}
+
+.card h3{
+margin-top:0;
+font-size:1.05rem;
+letter-spacing:1px;
+color:var(--accent);
+display:flex;
+justify-content:space-between;
+align-items:center;
 }
 
 .card::before{
@@ -101,28 +224,46 @@ pointer-events:none;
 .card:hover::before{
 opacity:1;
 }
-/* =================================== */
 
-table{width:100%;border-collapse:collapse}
-th,td{padding:10px;text-align:center}
-
-.high{color:var(--danger)}
-.mid{color:var(--warn)}
-.low{color:var(--safe)}
-
-.badge{
-padding:5px 10px;
-border-radius:12px;
-font-size:.75rem;
+.stat-value{
+font-size:2rem;
+font-weight:800;
+margin-top:8px;
+display:block;
+font-family:'Orbitron', sans-serif;
 }
 
+/* TABLE */
+table{width:100%;border-collapse:collapse;margin-top:10px}
+th,td{padding:11px 8px;text-align:center;border-bottom:1px solid rgba(255,255,255,.06);font-size:.85rem}
+th{color:var(--muted);font-weight:600;text-transform:uppercase;font-size:.75rem;letter-spacing:1px}
+
+.high{color:var(--danger);font-weight:700}
+.mid{color:var(--warn);font-weight:700}
+.low{color:var(--safe);font-weight:700}
+
+.badge{
+display:inline-block;
+padding:4px 9px;
+border-radius:12px;
+font-size:.72rem;
+font-weight:600;
+}
+.badge-risky{background:rgba(255,77,77,.2);color:#ff4d4d;border:1px solid rgba(255,77,77,.3)}
+.badge-monitored{background:rgba(250,204,21,.2);color:#ffd700;border:1px solid rgba(250,204,21,.3)}
+.badge-trusted{background:rgba(0,255,153,.2);color:#00ff99;border:1px solid rgba(0,255,153,.3)}
+.badge-sim{background:rgba(148,163,184,.2);color:#cbd5e1;border:1px solid rgba(148,163,184,.3);font-size:.65rem;margin-left:4px}
+.badge-resolved{background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)}
+
+/* MAP */
 #map{
 width:100%;
-height:350px;
+height:340px;
 border-radius:16px;
 overflow:hidden;
 position:relative;
 background:#020617;
+border:1px solid rgba(255,255,255,.06);
 }
 
 #map img{
@@ -130,6 +271,7 @@ width:100%;
 height:100%;
 opacity:.45;
 filter:invert(1);
+object-fit:cover;
 }
 
 .attack-dot{
@@ -137,7 +279,9 @@ position:absolute;
 width:12px;height:12px;
 border-radius:50%;
 background:#ff4d4d;
+box-shadow:0 0 12px rgba(255,77,77,.8);
 animation:pulseDot 1.5s infinite;
+pointer-events:none;
 }
 
 @keyframes pulseDot{
@@ -145,210 +289,582 @@ from{transform:scale(1);opacity:1}
 to{transform:scale(3);opacity:0}
 }
 
-/* TOGGLE – restored neutral color */
+/* TOGGLES & CONTROLS */
 #toggle{
-position:fixed;
-top:20px;
-left:20px;
-padding:10px 14px;
+padding:8px 14px;
 background:#111;
 border-radius:12px;
 cursor:pointer;
 color:#fff;
+font-size:.85rem;
+border:1px solid rgba(255,255,255,.15);
+display:inline-block;
+}
+
+.sim-controls{
+display:grid;
+grid-template-columns:1fr 1fr 1fr;
+gap:12px;
+}
+
+.map-disclaimer{
+position:absolute;
+bottom:10px;
+right:12px;
+background:rgba(0,0,0,.7);
+padding:4px 10px;
+border-radius:6px;
+font-size:.7rem;
+color:var(--muted);
+pointer-events:none;
 }
 </style>
 </head>
 
 <body>
 
-<div id="toggle" onclick="toggleMode()">🟢 Hacker Mode</div>
-
 <div class="container">
-<h1>AuthGuard-X SOC</h1>
+  <div class="header-bar">
+    <div id="toggle" onclick="toggleMode()">🟢 Hacker Mode</div>
+    <div id="authStatusText" style="font-size:.85rem;color:var(--muted)">Checking session...</div>
+  </div>
 
-<div class="login" id="loginBox">
-<div style="
-margin-top:15px;
-padding:12px;
-border-radius:12px;
-background:rgba(0,247,255,.08);
-font-size:.9rem;
-text-align:center;
-">
-<b style="color:#00f7ff">Demo Credentials</b><br>
-Username: <span style="cursor:pointer;color:#00ff99"
-onclick="fillDemo()">admin</span><br>
-Password: <span style="cursor:pointer;color:#00ff99"
-onclick="fillDemo()">admin123</span>
-</div>
+  <h1>AuthGuard-X SOC</h1>
+  <div class="subtitle">Security Operations Center Simulation & Incident Hardening Platform</div>
 
-<input id="user" placeholder="Username">
-<input id="pass" type="password" placeholder="Password">
-<button onclick="login()">Login</button>
-<p id="msg"></p>
-</div>
+  <!-- SIMULATION DISCLAIMER BANNER -->
+  <div class="sim-banner">
+    <span>⚠️</span>
+    <span><b>DEMONSTRATION PLATFORM:</b> Incident feeds and attack map markers represent simulated data generated for SOC analyst training and security posture evaluation.</span>
+  </div>
 
-<div class="dashboard" id="dash">
+  <!-- LOGIN BOX -->
+  <div class="login" id="loginBox">
+    <h3 style="margin-top:0;text-align:center;color:var(--accent)">SOC Analyst Authentication</h3>
 
-<div class="cards">
-<div class="card">Total Attacks<br><b id="total">0</b></div>
-<div class="card">Active Threats<br><b id="active">0</b></div>
-<div class="card">High Risk<br><b id="high">0</b></div>
-<div class="card">Health<br><b id="health">100</b></div>
-</div>
+    <div class="demo-box" id="demoBox" style="display:none">
+      <b style="color:var(--accent)">Development Demo Credentials</b><br>
+      <span style="font-size:.8rem;color:var(--muted)">Provisioned in development mode only:</span><br>
+      Username: <b id="demoUserLabel" style="cursor:pointer;color:var(--safe)" onclick="fillDemo()">admin</b><br>
+      Password: <b id="demoPassLabel" style="cursor:pointer;color:var(--safe)" onclick="fillDemo()">••••••••</b>
+    </div>
 
-<div class="card" style="margin-top:20px">
-<button onclick="simulate('Brute Force',85)">Simulate Brute Force (High risk)</button>
-<button onclick="simulate('Bot Login',55)">Simulate Bot (Low risk)</button>
-</div>
+    <input id="user" placeholder="Analyst Username" autocomplete="username">
+    <input id="pass" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="loginBtn" onclick="login()">Authenticate Session</button>
+    <p id="msg" style="text-align:center;font-size:.85rem;color:var(--danger);min-height:1.2em"></p>
+  </div>
 
-<div class="card" style="margin-top:20px">
-<h3>Threat Timeline</h3>
-<canvas id="timeline"></canvas>
-<button onclick="replayTimeline()">Replay</button>
-</div>
+  <!-- DASHBOARD -->
+  <div class="dashboard" id="dash">
+    <div class="user-status-bar">
+      <div>
+        <span>Logged in as: <b id="sessionUserDisplay" style="color:var(--accent)">-</b></span>
+        <span style="margin-left:15px">Role: <span id="sessionRoleBadge" class="badge badge-trusted">analyst</span></span>
+        <span id="envBadge" class="badge badge-sim" style="margin-left:10px">DEV</span>
+      </div>
+      <div>
+        <button onclick="logout()" class="btn-secondary" style="width:auto;padding:6px 14px;margin:0;font-size:.8rem">End Session (Logout)</button>
+      </div>
+    </div>
 
-<div class="card" style="margin-top:20px">
-<h3>Global Attack Map</h3>
-<div id="map">
-<img src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg">
-</div>
-</div>
+    <!-- METRIC CARDS -->
+    <div class="cards">
+      <div class="card">
+        Total Incidents<br>
+        <span class="stat-value" id="total">0</span>
+      </div>
+      <div class="card">
+        Active Threats<br>
+        <span class="stat-value" id="active" style="color:var(--warn)">0</span>
+      </div>
+      <div class="card">
+        High Severity<br>
+        <span class="stat-value" id="high" style="color:var(--danger)">0</span>
+      </div>
+      <div class="card">
+        Security Health Score<br>
+        <span class="stat-value" id="health" style="color:var(--safe)">100</span>
+      </div>
+    </div>
 
-<div class="card" style="margin-top:20px">
-<h3>Attack Logs</h3>
-<table>
-<thead>
-<tr><th>ID</th><th>User</th><th>Attack</th><th>Risk</th><th>Status</th></tr>
-</thead>
-<tbody id="logs"></tbody>
-</table>
-</div>
+    <!-- SIMULATION CONTROLS -->
+    <div class="card" style="margin-top:20px">
+      <h3>
+        <span>Threat Simulation Vector Engine</span>
+        <span style="font-size:.75rem;color:var(--muted);font-weight:normal">Controlled Demo Telemetry</span>
+      </h3>
+      <div class="sim-controls">
+        <button onclick="simulateAttack('Brute Force Credential Spray', 85, 'high_velocity_login')">
+          ⚡ Simulate Brute Force (High Risk 85)
+        </button>
+        <button onclick="simulateAttack('Credential Stuffing Bot', 65, 'automated_stuffing')">
+          🤖 Simulate Bot Stuffing (Med Risk 65)
+        </button>
+        <button onclick="simulateAttack('Suspicious Geolocation Anomaly', 35, 'anomalous_travel')">
+          🌐 Simulate Geo Anomaly (Low Risk 35)
+        </button>
+      </div>
+    </div>
 
-</div>
+    <!-- THREAT TIMELINE -->
+    <div class="card" style="margin-top:20px">
+      <h3>
+        <span>Incident Severity Timeline</span>
+        <button onclick="replayTimeline()" class="btn-secondary" style="width:auto;padding:5px 12px;margin:0;font-size:.8rem">Replay Events</button>
+      </h3>
+      <div style="height:220px;position:relative">
+        <canvas id="timeline"></canvas>
+      </div>
+    </div>
+
+    <!-- ATTACK MAP -->
+    <div class="card" style="margin-top:20px">
+      <h3>
+        <span>Global Telemetry Vectors</span>
+        <span style="font-size:.75rem;color:var(--muted);font-weight:normal">Simulated Geographic Coordinates</span>
+      </h3>
+      <div id="map">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg" alt="World Map">
+        <div class="map-disclaimer">Simulated Map Markers • Not Live Geospatial Threat Feeds</div>
+      </div>
+    </div>
+
+    <!-- INCIDENT TABLE -->
+    <div class="card" style="margin-top:20px">
+      <h3>
+        <span>Security Incident Feed & Resolution</span>
+        <button onclick="loadIncidents()" class="btn-secondary" style="width:auto;padding:5px 12px;margin:0;font-size:.8rem">Refresh Logs</button>
+      </h3>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Target User</th>
+            <th>Attack Vector</th>
+            <th>Location / Source</th>
+            <th>Risk Score</th>
+            <th>Telemetry</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="logs"></tbody>
+      </table>
+    </div>
+
+  </div>
 </div>
 
 <script>
-let chart,fullData=[];
+// Base API configuration (supports same-origin or explicit backend origin)
+const API_BASE = window.AUTHGUARD_API_URL || "";
 
-/* LOGIN */
-async function login(){
-const r=await fetch("http://127.0.0.1:5000/login",{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({username:user.value,password:pass.value})
+let chart = null;
+let fullTimelineData = [];
+let cachedDemoCreds = null;
+
+// Safe HTML text escaping helper to prevent XSS
+function escapeHTML(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// -----------------------------------------------------------------------------
+// SESSION LIFECYCLE & AUTHENTICATION
+// -----------------------------------------------------------------------------
+async function checkSession() {
+  const statusEl = document.getElementById("authStatusText");
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/session`, { credentials: "include" });
+    if (!res.ok) throw new Error("Status check failed");
+    const data = await res.json();
+
+    document.getElementById("envBadge").textContent = (data.environment || "ENV").toUpperCase();
+
+    if (data.authenticated && data.user) {
+      statusEl.textContent = `Active Session: ${data.user.username}`;
+      showDashboard(data.user);
+    } else {
+      statusEl.textContent = "Unauthenticated";
+      showLogin(data);
+    }
+  } catch (err) {
+    statusEl.textContent = "Backend Connection Offline";
+    console.error("Auth check failed:", err);
+  }
+}
+
+function showLogin(authData) {
+  document.getElementById("loginBox").style.display = "block";
+  document.getElementById("dash").style.display = "none";
+
+  const demoBox = document.getElementById("demoBox");
+  if (authData && authData.demo_credentials) {
+    cachedDemoCreds = authData.demo_credentials;
+    document.getElementById("demoUserLabel").textContent = authData.demo_credentials.username;
+    document.getElementById("demoPassLabel").textContent = authData.demo_credentials.password;
+    demoBox.style.display = "block";
+  } else {
+    demoBox.style.display = "none";
+  }
+}
+
+function showDashboard(user) {
+  document.getElementById("loginBox").style.display = "none";
+  document.getElementById("dash").style.display = "block";
+  document.getElementById("sessionUserDisplay").textContent = user.username || "Analyst";
+  document.getElementById("sessionRoleBadge").textContent = (user.role || "analyst").toUpperCase();
+  loadIncidents();
+}
+
+function fillDemo() {
+  if (cachedDemoCreds) {
+    document.getElementById("user").value = cachedDemoCreds.username;
+    document.getElementById("pass").value = cachedDemoCreds.password;
+  }
+}
+
+async function login() {
+  const userVal = document.getElementById("user").value.trim();
+  const passVal = document.getElementById("pass").value;
+  const msgEl = document.getElementById("msg");
+  const loginBtn = document.getElementById("loginBtn");
+
+  msgEl.textContent = "";
+
+  if (!userVal || !passVal) {
+    msgEl.textContent = "Please provide username and password.";
+    return;
+  }
+
+  loginBtn.disabled = true;
+  loginBtn.textContent = "Verifying...";
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ username: userVal, password: passVal })
+    });
+
+    const data = await res.json();
+    if (res.status === 200 && data.status === "success") {
+      msgEl.textContent = "";
+      document.getElementById("pass").value = "";
+      checkSession();
+    } else if (res.status === 429) {
+      msgEl.textContent = "Rate limit reached. Please wait before retrying.";
+    } else {
+      msgEl.textContent = data.error || "Authentication failed.";
+    }
+  } catch (err) {
+    msgEl.textContent = "Connection error. Is backend server active?";
+  } finally {
+    loginBtn.disabled = false;
+    loginBtn.textContent = "Authenticate Session";
+  }
+}
+
+async function logout() {
+  try {
+    await fetch(`${API_BASE}/api/auth/logout`, {
+      method: "POST",
+      credentials: "include"
+    });
+  } catch (err) {
+    console.error("Logout request error:", err);
+  }
+  checkSession();
+}
+
+// -----------------------------------------------------------------------------
+// INCIDENT RETRIEVAL & SAFE RENDERING (XSS-FREE)
+// -----------------------------------------------------------------------------
+async function loadIncidents() {
+  try {
+    const res = await fetch(`${API_BASE}/api/incidents`, { credentials: "include" });
+    if (res.status === 401) {
+      checkSession();
+      return;
+    }
+    const data = await res.json();
+    renderIncidentTable(data);
+  } catch (err) {
+    console.error("Failed to load incidents:", err);
+  }
+}
+
+function renderIncidentTable(incidents) {
+  const tbody = document.getElementById("logs");
+  tbody.innerHTML = "";
+
+  let healthScore = 100;
+  let highCount = 0;
+  let activeThreats = 0;
+  const timelineScores = [];
+
+  if (!Array.isArray(incidents) || incidents.length === 0) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="9" style="color:var(--muted);padding:24px">No security incidents logged.</td>`;
+    tbody.appendChild(tr);
+    updateMetrics(0, 0, 0, 100);
+    drawTimeline([]);
+    return;
+  }
+
+  incidents.forEach(item => {
+    const tr = document.createElement("tr");
+
+    // Severity styling
+    let riskClass = "low";
+    let statusBadge = `<span class="badge badge-trusted">LOW</span>`;
+    if (item.risk >= 70) {
+      riskClass = "high";
+      statusBadge = `<span class="badge badge-risky">CRITICAL</span>`;
+      highCount++;
+    } else if (item.risk >= 40) {
+      riskClass = "mid";
+      statusBadge = `<span class="badge badge-monitored">MEDIUM</span>`;
+    }
+
+    if (!item.resolved) {
+      activeThreats++;
+      healthScore -= (item.risk >= 70 ? 8 : (item.risk >= 40 ? 4 : 1));
+    }
+
+    timelineScores.push(item.risk);
+
+    const isResolved = Boolean(item.resolved);
+    const isSimulated = Boolean(item.is_simulated);
+
+    // Build row safely using escaped text to eliminate XSS
+    const idEscaped = escapeHTML(item.id);
+    const userEscaped = escapeHTML(item.username);
+    const attackEscaped = escapeHTML(item.attack);
+    const locationEscaped = escapeHTML(item.location || "Internal");
+    const riskEscaped = escapeHTML(item.risk);
+
+    const typeBadge = isSimulated
+      ? `<span class="badge badge-sim">SIMULATED</span>`
+      : `<span class="badge badge-monitored">TELEMETRY</span>`;
+
+    const resolutionStatus = isResolved
+      ? `<span class="badge badge-resolved">RESOLVED</span>`
+      : `<span class="badge badge-risky">OPEN</span>`;
+
+    const actionCell = isResolved
+      ? `<span style="color:var(--muted);font-size:.8rem">Closed</span>`
+      : `<button class="btn-resolve" onclick="resolveIncident(${item.id})">Resolve</button>`;
+
+    tr.innerHTML = `
+      <td>#${idEscaped}</td>
+      <td>${typeBadge}</td>
+      <td><b>${userEscaped}</b></td>
+      <td>${attackEscaped}</td>
+      <td><span style="font-size:.78rem;color:var(--muted)">${locationEscaped}</span></td>
+      <td class="${riskClass}">${riskEscaped}</td>
+      <td>${statusBadge}</td>
+      <td>${resolutionStatus}</td>
+      <td>${actionCell}</td>
+    `;
+
+    tbody.appendChild(tr);
+  });
+
+  const finalHealth = Math.max(0, healthScore);
+  updateMetrics(incidents.length, activeThreats, highCount, finalHealth);
+  drawTimeline(timelineScores.reverse());
+}
+
+function updateMetrics(total, active, high, health) {
+  document.getElementById("total").textContent = total;
+  document.getElementById("active").textContent = active;
+  document.getElementById("high").textContent = high;
+  document.getElementById("health").textContent = health;
+}
+
+// -----------------------------------------------------------------------------
+// INCIDENT RESOLUTION
+// -----------------------------------------------------------------------------
+async function resolveIncident(incidentId) {
+  try {
+    const res = await fetch(`${API_BASE}/api/incidents/${incidentId}/resolve`, {
+      method: "POST",
+      credentials: "include"
+    });
+    if (res.ok) {
+      loadIncidents();
+    } else {
+      const errData = await res.json();
+      alert(`Resolution failed: ${errData.message || "Unknown error"}`);
+    }
+  } catch (err) {
+    alert("Network error while resolving incident.");
+  }
+}
+
+// -----------------------------------------------------------------------------
+// ATTACK SIMULATION
+// -----------------------------------------------------------------------------
+const SIM_CITIES = [
+  "Frankfurt, Germany",
+  "Singapore",
+  "Tokyo, Japan",
+  "London, UK",
+  "Sao Paulo, Brazil",
+  "Sydney, Australia",
+  "San Jose, USA"
+];
+
+async function simulateAttack(attackName, riskScore, behaviorType) {
+  const randomCity = SIM_CITIES[Math.floor(Math.random() * SIM_CITIES.length)];
+
+  try {
+    const res = await fetch(`${API_BASE}/api/incidents/simulate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        attack: attackName,
+        risk: riskScore,
+        behavior: behaviorType,
+        username: "sim_agent",
+        is_simulated: true,
+        simulated_location: randomCity
+      })
+    });
+
+    if (res.ok) {
+      // Trigger visual simulated attack marker on map
+      const randX = Math.random() * 85 + 7;
+      const randY = Math.random() * 55 + 20;
+      addMapAttackMarker(randX, randY);
+      loadIncidents();
+    } else if (res.status === 401) {
+      checkSession();
+    } else {
+      const err = await res.json();
+      alert(`Simulation failed: ${err.message || "Error"}`);
+    }
+  } catch (err) {
+    console.error("Simulation request error:", err);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// VISUAL MAP & TIMELINE
+// -----------------------------------------------------------------------------
+function addMapAttackMarker(xPercent, yPercent) {
+  const map = document.getElementById("map");
+  const dot = document.createElement("div");
+  dot.className = "attack-dot";
+  dot.style.left = `${xPercent}%`;
+  dot.style.top = `${yPercent}%`;
+  map.appendChild(dot);
+  setTimeout(() => dot.remove(), 2200);
+}
+
+function drawTimeline(dataPoints) {
+  fullTimelineData = [...dataPoints];
+  renderChart(dataPoints);
+}
+
+function renderChart(dataPoints) {
+  const ctx = document.getElementById("timeline");
+  if (!ctx) return;
+
+  if (chart) chart.destroy();
+
+  const labels = dataPoints.map((_, i) => `T-${dataPoints.length - i}`);
+  chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: labels,
+      datasets: [{
+        label: "Risk Score Telemetry",
+        data: dataPoints,
+        borderColor: "#ff4d4d",
+        backgroundColor: "rgba(255,77,77,0.15)",
+        fill: true,
+        tension: 0.35,
+        pointRadius: 4,
+        pointHoverRadius: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: {
+          beginAtZero: true,
+          max: 100,
+          grid: { color: "rgba(255,255,255,0.06)" }
+        },
+        x: {
+          grid: { color: "rgba(255,255,255,0.06)" }
+        }
+      },
+      plugins: {
+        legend: { display: false }
+      }
+    }
+  });
+}
+
+function replayTimeline() {
+  if (fullTimelineData.length === 0) return;
+  let idx = 0;
+  const temp = [];
+  const timer = setInterval(() => {
+    temp.push(fullTimelineData[idx]);
+    renderChart(temp);
+    idx++;
+    if (idx >= fullTimelineData.length) clearInterval(timer);
+  }, 300);
+}
+
+// -----------------------------------------------------------------------------
+// UI CONTROLS & INTERACTIVE EFFECTS
+// -----------------------------------------------------------------------------
+function toggleMode() {
+  document.body.classList.toggle("hacker");
+  const btn = document.getElementById("toggle");
+  if (document.body.classList.contains("hacker")) {
+    btn.textContent = "⚡ Terminal Mode";
+  } else {
+    btn.textContent = "🟢 Hacker Mode";
+  }
+}
+
+// Interactive glass cursor spotlight effect
+document.querySelectorAll(".card").forEach(card => {
+  card.addEventListener("mousemove", e => {
+    const r = card.getBoundingClientRect();
+    card.style.setProperty("--x", `${e.clientX - r.left}px`);
+    card.style.setProperty("--y", `${e.clientY - r.top}px`);
+  });
 });
-if(r.status===200){
-loginBox.style.display="none";
-dash.style.display="block";
-load();
-}else msg.innerText="Invalid Login";
-}
 
-/* SIMULATE */
-async function simulate(type,risk){
-await fetch("http://127.0.0.1:5000/log_attack",{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({
-username:"simulator",
-attack:type,
-behavior:"auto",
-risk:risk
-})
+// Allow Enter key to trigger login
+document.getElementById("pass").addEventListener("keydown", e => {
+  if (e.key === "Enter") login();
 });
-addAttack(Math.random()*90+5,Math.random()*60+20);
-load();
-}
-
-/* LOAD */
-async function load(){
-const r=await fetch("http://127.0.0.1:5000/get_logs");
-const data=await r.json();
-logs.innerHTML="";
-let h=100,hi=0,ac=0;
-let sev=[];
-
-data.forEach(l=>{
-let cls=l.risk>=70?"high":l.risk>=40?"mid":"low";
-let badge=l.risk<40?"Trusted":l.risk<70?"Monitored":"Risky";
-logs.innerHTML+=`
-<tr>
-<td>${l.id}</td>
-<td>${l.username}</td>
-<td>${l.attack}</td>
-<td class="${cls}">${l.risk}</td>
-<td>${badge}</td>
-</tr>`;
-h-=l.risk>=70?5:l.risk>=40?2:0;
-if(l.risk>=70)hi++;
-if(l.risk>=50)ac++;
-sev.push(l.risk);
+document.getElementById("user").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("pass").focus();
 });
 
-total.innerText=data.length;
-high.innerText=hi;
-active.innerText=ac;
-health.innerText=Math.max(h,0);
-drawTimeline(sev);
-}
-
-/* CHART */
-function drawTimeline(d){
-fullData=[...d];
-renderChart(d);
-}
-
-function renderChart(d){
-const ctx=document.getElementById("timeline");
-if(chart)chart.destroy();
-chart=new Chart(ctx,{
-type:"line",
-data:{labels:d.map((_,i)=>i+1),
-datasets:[{data:d,borderColor:"#ff4d4d",fill:false}]},
-options:{scales:{y:{beginAtZero:true,max:100}}}
+// Initialize on page load
+window.addEventListener("DOMContentLoaded", () => {
+  checkSession();
 });
-}
-
-function replayTimeline(){
-let i=0,tmp=[];
-const t=setInterval(()=>{
-tmp.push(fullData[i]);
-renderChart(tmp);
-i++;
-if(i>=fullData.length)clearInterval(t);
-},400);
-}
-
-/* MAP */
-const map=document.getElementById("map");
-function addAttack(x,y){
-const d=document.createElement("div");
-d.className="attack-dot";
-d.style.left=x+"%";
-d.style.top=y+"%";
-map.appendChild(d);
-setTimeout(()=>d.remove(),2000);
-}
-
-/* HACKER MODE */
-function toggleMode(){
-document.body.classList.toggle("hacker");
-}
-
-/* CARD CURSOR TRACKING */
-document.querySelectorAll(".card").forEach(card=>{
-card.addEventListener("mousemove",e=>{
-const r=card.getBoundingClientRect();
-card.style.setProperty("--x",`${e.clientX-r.left}px`);
-card.style.setProperty("--y",`${e.clientY-r.top}px`);
-});
-});
-function fillDemo(){
-  document.getElementById("user").value = "admin";
-  document.getElementById("pass").value = "admin123";
-}
-
 </script>
 
 </body>
