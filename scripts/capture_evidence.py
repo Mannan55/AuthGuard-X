@@ -253,23 +253,56 @@ def run_full_verification():
         passed_assertions += 1
         print(f"  -> Passed: All {len(nav_stats)} navigation items cleanly styled with zero default link artifacts.")
 
-        # ── Assertion 6: Zero Health Score Nullish Handling ───────
-        print("\n[Assert 6] Verifying Zero Health Score Fallback Regression (Score 0 Rendered, Not 100)...")
-        browser.evaluate("""
-            window.Dashboard.renderKPIs({
-                total_incidents: 25,
-                open_incidents: 20,
-                critical_count: 15,
-                health_score: 0,
-                simulated_count: 25,
-                telemetry_count: 0
-            });
+        # ── Assertion 6: Dynamic Health Score Posture & Color Verification ──
+        print("\n[Assert 6] Verifying Dynamic Health Score Posture & Color (0=Red, 50=Amber, 80=Green, 100=Green)...")
+        health_color_audit = browser.evaluate("""
+            (async () => {
+                const results = [];
+                const testCases = [
+                    { score: 0,   expectedRgb: 'rgb(220, 38, 38)', expectedClass: 'health-critical', desc: 'Critical Red (0-49)' },
+                    { score: 50,  expectedRgb: 'rgb(245, 158, 11)', expectedClass: 'health-warning',  desc: 'Warning Amber (50-79)' },
+                    { score: 80,  expectedRgb: 'rgb(34, 197, 94)',  expectedClass: 'health-success',  desc: 'Success Green (80-100)' },
+                    { score: 100, expectedRgb: 'rgb(34, 197, 94)',  expectedClass: 'health-success',  desc: 'Success Green (80-100)' }
+                ];
+
+                const healthEl = document.getElementById('metric-health');
+                for (const tc of testCases) {
+                    window.Dashboard.renderKPIs({
+                        total_incidents: 20,
+                        open_incidents: 10,
+                        critical_count: 5,
+                        health_score: tc.score,
+                        simulated_count: 20,
+                        telemetry_count: 0
+                    });
+
+                    // Await tick animation
+                    await new Promise(r => setTimeout(r, 700));
+
+                    const renderedText = healthEl.textContent.trim();
+                    const computedColor = window.getComputedStyle(healthEl).color;
+                    const classList = Array.from(healthEl.classList);
+
+                    results.push({
+                        score: tc.score,
+                        renderedText,
+                        computedColor,
+                        expectedRgb: tc.expectedRgb,
+                        colorMatches: (computedColor === tc.expectedRgb),
+                        hasExpectedClass: classList.includes(tc.expectedClass),
+                        classList
+                    });
+                }
+                return results;
+            })()
         """)
-        time.sleep(0.8)
-        rendered_health = browser.evaluate("document.getElementById('metric-health').textContent.trim()")
-        assert rendered_health == "0", f"Expected health score '0', got '{rendered_health}' (possible || 100 bug regression)"
+        for res in health_color_audit:
+            print(f"  Score {res['score']:>3}: rendered='{res['renderedText']}', color={res['computedColor']} (expected {res['expectedRgb']}), classes={res['classList']}")
+            assert res["renderedText"] == str(res["score"]), f"Score {res['score']} text mismatch: {res['renderedText']}"
+            assert res["colorMatches"], f"Score {res['score']} color mismatch: got {res['computedColor']}, expected {res['expectedRgb']}"
+            assert res["hasExpectedClass"], f"Score {res['score']} missing expected CSS class"
         passed_assertions += 1
-        print("  -> Passed: Zero health score renders strictly as 0.")
+        print("  -> Passed: All 4 health score thresholds (0, 50, 80, 100) verified with exact computed color RGB assertions.")
 
         # Re-trigger regular simulation telemetry for overview view
         print("\n[+] Seeding Telemetry Simulations for Overview View...")

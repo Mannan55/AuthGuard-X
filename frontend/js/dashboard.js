@@ -32,9 +32,17 @@
     if (healthEl) {
       const score = typeof metrics.health_score === 'number' ? metrics.health_score : (metrics.health_score ?? 100);
       window.UI.numberTick(healthEl, score);
-      if (score >= 80) healthEl.style.color = 'var(--color-success)';
-      else if (score >= 50) healthEl.style.color = 'var(--color-warning)';
-      else healthEl.style.color = 'var(--color-critical)';
+      healthEl.classList.remove('health-success', 'health-warning', 'health-critical', 'highlight-success', 'highlight-warning', 'highlight-danger');
+      if (score >= 80) {
+        healthEl.classList.add('health-success');
+        healthEl.style.setProperty('color', 'var(--color-success)', 'important');
+      } else if (score >= 50) {
+        healthEl.classList.add('health-warning');
+        healthEl.style.setProperty('color', 'var(--color-warning)', 'important');
+      } else {
+        healthEl.classList.add('health-critical');
+        healthEl.style.setProperty('color', 'var(--color-critical)', 'important');
+      }
     }
 
     // Mini counters

@@ -237,6 +237,11 @@
 .highlight-success { color: var(--color-success) !important; }
 .highlight-cyan    { color: var(--color-accent) !important; }
 
+/* Dynamic Health Score Posture Classes */
+.health-critical   { color: var(--color-critical) !important; }
+.health-warning    { color: var(--color-warning) !important; }
+.health-success    { color: var(--color-success) !important; }
+
 /* ═══════════════════════════════════════════════════════
    BADGES
 ═══════════════════════════════════════════════════════ */
