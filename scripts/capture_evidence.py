@@ -4,6 +4,7 @@ import json
 import base64
 import time
 import subprocess
+import tempfile
 import urllib.request
 from pathlib import Path
 import websocket
@@ -16,18 +17,17 @@ CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 if not Path(CHROME_PATH).exists():
     CHROME_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 
-USER_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", "C:/Temp")) / "Temp" / "chrome_cdp_profile"
-USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
-
 
 class CDPClient:
-    def __init__(self, port=9222):
+    def __init__(self, port=9225):
         self.port = port
         self.proc = None
         self.ws = None
         self.msg_id = 0
+        self.tmp_dir = None
 
-    def start_browser(self):
+    def start_browser(self, width=1440, height=1080):
+        self.tmp_dir = tempfile.mkdtemp()
         cmd = [
             CHROME_PATH,
             f"--remote-debugging-port={self.port}",
@@ -35,25 +35,27 @@ class CDPClient:
             "--disable-gpu",
             "--no-first-run",
             "--no-default-browser-check",
-            f"--user-data-dir={USER_DATA_DIR}",
-            "--window-size=1440,1080",
-            "about:blank"
+            f"--user-data-dir={self.tmp_dir}",
+            f"--window-size={width},{height}",
+            "http://127.0.0.1:5000/"
         ]
         print(f"[*] Starting headless browser: {' '.join(cmd)}")
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(2)
+        time.sleep(2.5)
 
-        for _ in range(10):
+        for _ in range(12):
             try:
                 req = urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/list", timeout=2)
                 tabs = json.loads(req.read().decode())
-                if tabs:
-                    ws_url = tabs[0]["webSocketDebuggerUrl"]
-                    print(f"[+] Connecting WebSocket to: {ws_url}")
+                # Filter specifically for page tab (not extensions or background pages)
+                pages = [t for t in tabs if t.get("type") == "page"]
+                if pages:
+                    ws_url = pages[0]["webSocketDebuggerUrl"]
+                    print(f"[+] Connecting WebSocket to page: {ws_url}")
                     self.ws = websocket.create_connection(ws_url, timeout=15)
                     print("[+] WebSocket connected successfully!")
                     return
-            except Exception as e:
+            except Exception:
                 time.sleep(1)
         raise RuntimeError("Failed to connect to browser CDP port.")
 
@@ -68,7 +70,6 @@ class CDPClient:
                 if "error" in resp:
                     raise RuntimeError(f"CDP Error in {method}: {resp['error']}")
                 return resp.get("result", {})
-            # else it's an event notification, keep reading
 
     def evaluate(self, expression):
         res = self.send_cmd("Runtime.evaluate", {
@@ -100,62 +101,79 @@ class CDPClient:
                 self.proc.kill()
 
 
-def run_flow():
-    client = CDPClient()
+def run_evidence_capture():
+    # 1. Start Desktop browser session (1440x1080)
+    client = CDPClient(port=9225)
     try:
-        client.start_browser()
-
-        # 1. Navigate to AuthGuard-X Login page
-        print("[*] Navigating to http://127.0.0.1:5000/...")
-        client.send_cmd("Page.navigate", {"url": "http://127.0.0.1:5000/"})
+        client.start_browser(width=1440, height=1080)
         time.sleep(2)
 
-        # 1. Capture Login Screen
+        # 1. Capture Login View
+        print("[*] Capturing 01_login_view.png...")
         client.capture_screenshot("01_login_view.png")
 
-        # 2. Perform Login: fill demo credentials and click login
-        print("[*] Autofilling credentials and authenticating...")
-        client.evaluate("fillDemo();")
+        # Authenticate
+        print("[*] Authenticating with demo credentials...")
+        client.evaluate("window.Auth.fillDemoCredentials();")
         time.sleep(0.5)
-        client.evaluate("login();")
+        client.evaluate("document.getElementById('login-submit-btn').click();")
+        time.sleep(2.5)
+
+        # Trigger attack simulations to seed metrics & incidents
+        print("[*] Simulating attack vectors...")
+        client.evaluate("window.Dashboard.triggerSimulation('Brute Force Credential Spray', 85, 'high_velocity_login');")
+        time.sleep(1)
+        client.evaluate("window.Dashboard.triggerSimulation('Credential Stuffing Bot', 65, 'automated_stuffing');")
+        time.sleep(1)
+        client.evaluate("window.Dashboard.triggerSimulation('Suspicious Geolocation Travel', 35, 'geographic_velocity');")
         time.sleep(2)
 
-        # 3. Simulate attacks
-        print("[*] Simulating attacks...")
-        client.evaluate("simulateAttack('Brute Force Credential Spray', 85, 'high_velocity_login');")
-        time.sleep(1)
-        client.evaluate("simulateAttack('Credential Stuffing Bot', 65, 'automated_stuffing');")
-        time.sleep(1)
-        client.evaluate("simulateAttack('Suspicious Geolocation Anomaly', 35, 'anomalous_travel');")
-        time.sleep(2)
-
-        # 2. Capture Dashboard Overview
+        # 2. Capture Overview Dashboard
+        print("[*] Capturing 02_dashboard_overview.png...")
         client.capture_screenshot("02_dashboard_overview.png")
 
-        # 4. Toggle Hacker Mode
-        print("[*] Toggling Hacker Mode...")
-        client.evaluate("toggleMode();")
-        time.sleep(1)
-        client.capture_screenshot("03_hacker_mode.png")
+        # 3. Switch to Incidents Table view
+        print("[*] Navigating to Incidents Table view...")
+        client.evaluate("switchView('incidents');")
+        time.sleep(1.5)
+        print("[*] Capturing 03_incidents_table.png...")
+        client.capture_screenshot("03_incidents_table.png")
 
-        # Toggle back to normal SOC mode
-        client.evaluate("toggleMode();")
-        time.sleep(0.5)
-
-        # 5. Resolve an incident
-        print("[*] Resolving highest risk incident...")
+        # 4. Open Incident Detail Modal
+        print("[*] Opening Incident Detail modal...")
         client.evaluate("""
-            const resolveBtn = document.querySelector('.btn-resolve');
-            if (resolveBtn) resolveBtn.click();
+            const firstRow = document.querySelector('.view-detail-trigger');
+            if (firstRow) firstRow.click();
         """)
-        time.sleep(2)
-        client.capture_screenshot("04_incident_resolved.png")
+        time.sleep(1.5)
+        print("[*] Capturing 04_incident_detail_modal.png...")
+        client.capture_screenshot("04_incident_detail_modal.png")
 
-        print("[SUCCESS] All 4 evidence screenshots captured successfully!")
+        # Close modal
+        client.evaluate("window.UI.closeModal('incident-modal');")
+        time.sleep(0.5)
 
     finally:
         client.close()
 
+    # 5. Mobile Layout session (390x844 iPhone-style width)
+    print("[*] Starting Mobile Headless session (390x844)...")
+    mobile_client = CDPClient(port=9226)
+    try:
+        mobile_client.start_browser(width=390, height=844)
+        time.sleep(2)
+        # Login
+        mobile_client.evaluate("window.Auth.fillDemoCredentials();")
+        time.sleep(0.5)
+        mobile_client.evaluate("document.getElementById('login-submit-btn').click();")
+        time.sleep(2.5)
+        print("[*] Capturing 05_mobile_layout.png...")
+        mobile_client.capture_screenshot("05_mobile_layout.png")
+    finally:
+        mobile_client.close()
+
+    print("[SUCCESS] All Sprint 1 evidence screenshots successfully captured!")
+
 
 if __name__ == "__main__":
-    run_flow()
+    run_evidence_capture()
