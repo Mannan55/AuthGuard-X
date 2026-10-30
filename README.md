@@ -31,7 +31,7 @@ AuthGuard-X is a professional Security Operations Center (SOC) demonstration, tr
 | 7. Investigation Workspace & Lifecycle Stepper | 8. Evidence Metadata & Audit Timeline |
 |:---:|:---:|
 | ![Investigation Workspace](docs/screenshots/08_investigation_workspace.png) | ![Timeline & Evidence](docs/screenshots/09_investigation_timeline_and_evidence.png) |
-| *State machine progression (`New` → `Investigating` → `Contained` → `Resolved`)* | *Sanitized notes, IOC/pcap evidence pointers & tamper-evident audit history* |
+| *State machine progression (`New` → `Investigating` → `Contained` → `Resolved`)* | *Sanitized notes, IOC/pcap evidence pointers & append-only activity audit trail* |
 
 <div align="center">
   <img src="docs/screenshots/10_mobile_investigation_view.png" width="360" alt="Mobile Responsive Investigation Layout" />
@@ -44,10 +44,10 @@ AuthGuard-X is a professional Security Operations Center (SOC) demonstration, tr
 
 1. **Structured Case Investigation Training**: Transition junior and tier-2 analysts from basic alert closing to a rigorous 4-stage lifecycle state machine (**New → Investigating → Contained → Resolved**).
 2. **Analyst Ownership & Queue Triage**: Model multi-analyst SOC shift workflows where analysts claim unassigned incidents, manage personal active queues, and collaborate with role-based isolation.
-3. **Forensic Findings & Evidence Collection**: Capture timestamped triage observations, hypothesis testing notes, and attach structured evidence pointers (IOC hashes, network PCAP references, log excerpts) with URL scheme safety validation.
-4. **Accountability & Tamper-Evident Auditing**: Maintain an append-only audit trail logging every state transition, analyst reassignment, and containment timestamp with server-derived actor identity.
-5. **Attack Vector Simulation Engine**: Generate synthetic credential-stuffing, lateral traversal, and Kerberoasting telemetry to evaluate detection posture and test analyst workflows.
-6. **Defensive Hardening Reference**: Production-grade Flask architecture featuring bcrypt password hashing (12 rounds), signed session cookies, CSRF protection, RBAC middleware, and XSS sanitization.
+3. **Forensic Findings & Evidence Collection**: Capture timestamped triage observations, hypothesis testing notes, and attach structured evidence pointers (IOC hashes, network PCAP references, log excerpts) with URL scheme safety validation (strictly rejecting unsafe URI schemes like `javascript:`, `data:`, `file:`).
+4. **Accountability & Transactional Auditing**: Maintain an append-only audit trail logging every state transition, analyst reassignment, and containment timestamp with server-derived actor identity, plus a persistent system administrative audit log retained across incident purges.
+5. **Attack Vector Simulation Engine**: Generate synthetic credential-stuffing, lateral traversal, and Kerberoasting telemetry to evaluate detection posture and test analyst workflows with server-enforced provenance.
+6. **Defensive Hardening Reference**: Production-grade Flask architecture featuring bcrypt password hashing (12 rounds), signed session cookies, CSRF protection, optimistic concurrency locking (`version`), RBAC middleware, and XSS sanitization.
 
 ---
 
@@ -121,14 +121,15 @@ AuthGuard-X implements an enterprise SOC incident response lifecycle:
 |---|:---:|:---:|:---:|
 | `GET /api/incidents` (Search/Filter/List) | Allowed | Allowed | 401 Unauthorized |
 | `GET /api/incidents/<id>/case` (Details) | Allowed | Allowed | 401 Unauthorized |
-| `PATCH /api/incidents/<id>/case` (Lifecycle) | Assigned / Claimed Only | Allowed Any | 401 Unauthorized |
+| `PATCH /api/incidents/<id>/case` (Lifecycle) | Assigned Only / Auto-Claim | Allowed Any | 401 Unauthorized |
+| `POST /api/incidents/<id>/resolve` (Legacy & Unified) | Assigned Only | Allowed Any | 401 Unauthorized |
 | `POST /api/incidents/<id>/assign` (Self-Claim) | Unassigned Only | Allowed Any | 401 Unauthorized |
 | `POST /api/incidents/<id>/assign` (Reassign Others) | 403 Forbidden | Allowed | 401 Unauthorized |
-| `POST /api/incidents/<id>/notes` (Add Note) | Allowed | Allowed | 401 Unauthorized |
-| `POST /api/incidents/<id>/evidence` (Add IOC) | Allowed | Allowed | 401 Unauthorized |
+| `POST /api/incidents/<id>/notes` (Add Note) | Assigned / Auto-Claim | Allowed Any | 401 Unauthorized |
+| `POST /api/incidents/<id>/evidence` (Add IOC) | Assigned / Auto-Claim | Allowed Any | 401 Unauthorized |
 | `GET /api/cases/my-queue` (Personal Queue) | Personal Cases | Personal Cases | 401 Unauthorized |
 | `GET /api/cases/unassigned` (Unclaimed) | Allowed | Allowed | 401 Unauthorized |
-| `POST /api/incidents/clear` (Purge Protection) | 403 Forbidden | Requires Confirmation / Force Purge | 401 Unauthorized |
+| `POST /api/incidents/clear` (Purge Protection) | 403 Forbidden | Requires `force_purge_investigations` + `purge_reason` | 401 Unauthorized |
 | `POST /api/users/create` (Create Analyst) | 403 Forbidden | Allowed | 401 Unauthorized |
 
 ---
@@ -142,7 +143,7 @@ AuthGuard-X implements an enterprise SOC incident response lifecycle:
 - **Traffic Protection**: `Flask-Limiter` (IP-based endpoint rate throttling)
 - **Frontend Architecture**: Modular Vanilla JavaScript (ES6+), design tokens (`tokens.css`), responsive layout (`layout.css`), accessible components (`components.css`), Chart.js
 - **Database Engine**: SQLite3 with strict foreign keys (`PRAGMA foreign_keys = ON`), indexed lookups, and idempotent migrations
-- **Automated QA**: Pytest suite (88 tests) and headless Chrome CDP browser automation (15 real assertions)
+- **Automated QA**: Pytest suite (94 tests) and headless Chrome CDP browser automation (15 real assertions)
 
 ---
 
@@ -212,17 +213,17 @@ Default development accounts:
 The project includes two comprehensive layers of automated verification:
 
 ```powershell
-# 1. Run the complete Pytest suite (88 tests)
+# 1. Run the complete Pytest suite (94 tests)
 pytest tests -v
 
 # 2. Run real-browser visual and functional verification (15 assertions + screenshots)
 python scripts/capture_evidence.py
 ```
 
-### Test Suite Distribution (88 Tests Total)
+### Test Suite Distribution (94 Tests Total)
 - **Phase 1 Baseline** (`tests/test_auth_guard.py` — 15 tests): Health check, login validation, session state, unauthenticated access blocking, and persistence across restarts.
 - **Sprint 1 Professional UI & Hardening** (`tests/test_sprint1.py` — 54 tests): CSRF validation, simulation provenance enforcement, server-derived metrics, pagination envelopes, search/filter/sort allowlists, detail endpoints, and XSS resistance.
-- **Sprint 2 Advanced SOC Investigation** (`tests/test_sprint2.py` — 19 tests): Idempotent database migrations, automatic case creation, 4-stage lifecycle state machine, reopening workflow, mandatory resolution summary, analyst claiming/assignment RBAC, persistent investigation notes, evidence metadata validation, administrative log purge protection, personal queue isolation, and CSRF enforcement on case APIs.
+- **Sprint 2 Advanced SOC Investigation & Security Corrections** (`tests/test_sprint2.py` — 25 tests): Idempotent database migrations, automatic case creation, 4-stage lifecycle state machine, reopening workflow with incrementing `reopen_count`, mandatory resolution summary, strict case ownership enforcement (Analyst A cannot resolve Analyst B's cases), auto-claim policy on unassigned cases, optimistic concurrency locking (`version` 409 Conflict), URI scheme safety validation for evidence, administrative log purge protection with mandatory reason and persistent `system_audit_log`, personal queue isolation, and CSRF enforcement on case APIs.
 
 ---
 

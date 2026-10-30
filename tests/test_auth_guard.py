@@ -198,8 +198,11 @@ def test_incident_resolution(test_env):
     })
     inc_id = sim_res.get_json()["incident"]["id"]
 
-    # Resolve incident
-    res_resolve = client.post(f"/api/incidents/{inc_id}/resolve")
+    # Move incident to investigating
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+
+    # Resolve incident with required resolution summary
+    res_resolve = client.post(f"/api/incidents/{inc_id}/resolve", json={"summary": "Remediated SQL injection threat"})
     assert res_resolve.status_code == 200
     assert res_resolve.get_json()["status"] == "success"
 
@@ -243,7 +246,8 @@ def test_legacy_endpoint_aliases(test_env):
     assert logs[0]["attack"] == "Port Scan"
 
     # Legacy resolve at /resolve_incident/<id>
-    resolve_res = client.post(f"/resolve_incident/{log_id}")
+    client.patch(f"/api/incidents/{log_id}/case", json={"status": "investigating"})
+    resolve_res = client.post(f"/resolve_incident/{log_id}", json={"summary": "Remediated port scan activity"})
     assert resolve_res.status_code == 200
 
     # Legacy logout at /logout

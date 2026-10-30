@@ -96,12 +96,22 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
             contained_at TEXT,
             resolved_at TEXT,
             resolution_summary TEXT,
+            reopen_count INTEGER NOT NULL DEFAULT 0,
+            version INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE CASCADE,
             FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
         )
     ''')
+
+    # Safe migration: ensure reopen_count and version columns exist in cases
+    c.execute("PRAGMA table_info(cases)")
+    case_cols = [row["name"] for row in c.fetchall()]
+    if "reopen_count" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN reopen_count INTEGER NOT NULL DEFAULT 0")
+    if "version" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
 
     # Sprint 2: Investigation notes table
     c.execute('''
@@ -135,7 +145,7 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
         )
     ''')
 
-    # Sprint 2: Append-only investigation audit trail table
+    # Sprint 2: Append-only incident activity audit trail table
     c.execute('''
         CREATE TABLE IF NOT EXISTS incident_audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,23 +162,41 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
         )
     ''')
 
+    # Sprint 2: System-level administrative audit log (retained even after incident purge)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS system_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_id INTEGER NOT NULL,
+            actor_username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT NOT NULL,
+            reason TEXT,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )
+    ''')
+
     # Sprint 2: Performance indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_cases_assigned_to ON cases(assigned_to)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_notes_incident ON incident_notes(incident_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_evidence_incident ON incident_evidence(incident_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_audit_incident ON incident_audit_log(incident_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_system_audit_action ON system_audit_log(action)")
 
-    # Idempotent Backfill: Create case records for existing logs that don't have one
+    # Idempotent Backfill: Create case records for existing logs that don't have one.
+    # CRITICAL: Preserve unknown historical resolution times as NULL (do not overwrite with creation time).
     c.execute('''
-        INSERT INTO cases (incident_id, status, created_at, updated_at, resolved_at, resolution_summary)
+        INSERT INTO cases (incident_id, status, created_at, updated_at, resolved_at, resolution_summary, reopen_count, version)
         SELECT 
             id,
             CASE WHEN resolved = 1 THEN 'resolved' ELSE 'new' END,
             time,
             time,
-            CASE WHEN resolved = 1 THEN time ELSE NULL END,
-            CASE WHEN resolved = 1 THEN 'Resolved in previous system state' ELSE NULL END
+            NULL,
+            CASE WHEN resolved = 1 THEN 'Historical incident from prior system version' ELSE NULL END,
+            0,
+            1
         FROM logs
         WHERE id NOT IN (SELECT incident_id FROM cases)
     ''')
@@ -383,7 +411,8 @@ def _build_incidents_query(
         SELECT 
             logs.id, logs.username, logs.attack, logs.behavior, logs.risk, logs.ip, logs.location, logs.time, logs.resolved, logs.is_simulated,
             cases.status, cases.assigned_to, cases.assigned_username, cases.assigned_at,
-            cases.investigation_started_at, cases.contained_at, cases.resolved_at, cases.resolution_summary, cases.updated_at
+            cases.investigation_started_at, cases.contained_at, cases.resolved_at, cases.resolution_summary,
+            cases.reopen_count, cases.version, cases.updated_at
         FROM logs
         LEFT JOIN cases ON logs.id = cases.incident_id
         {where_clause}
@@ -427,6 +456,8 @@ def _row_to_dict(r):
         "contained_at": r["contained_at"] if ("contained_at" in keys and r["contained_at"]) else None,
         "resolved_at": r["resolved_at"] if ("resolved_at" in keys and r["resolved_at"]) else None,
         "resolution_summary": r["resolution_summary"] if ("resolution_summary" in keys and r["resolution_summary"]) else None,
+        "reopen_count": r["reopen_count"] if ("reopen_count" in keys and r["reopen_count"] is not None) else 0,
+        "version": r["version"] if ("version" in keys and r["version"] is not None) else 1,
         "updated_at": r["updated_at"] if ("updated_at" in keys and r["updated_at"]) else None,
     }
 
@@ -896,90 +927,8 @@ def create_app(test_config=None) -> Flask:
             }
         }), 201
 
-    @app.route("/api/incidents/<int:id>/resolve", methods=["POST"])
-    @app.route("/resolve_incident/<int:id>", methods=["POST"])
-    @login_required
-    def resolve_incident(id: int):
-        conn = get_db_connection(app.config["DATABASE_PATH"])
-        c = conn.cursor()
-        c.execute("SELECT id, resolved FROM logs WHERE id = ?", (id,))
-        row = c.fetchone()
-        if not row:
-            conn.close()
-            return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
-
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        summary = "Incident marked resolved"
-        data = request.get_json(silent=True)
-        if data and isinstance(data, dict) and data.get("summary") and isinstance(data.get("summary"), str):
-            summary = data.get("summary").strip()[:1000]
-
-        # Update both logs.resolved and cases.status in atomic transaction
-        c.execute("UPDATE logs SET resolved = 1 WHERE id = ?", (id,))
-        
-        # Ensure case exists before updating
-        c.execute("SELECT incident_id FROM cases WHERE incident_id = ?", (id,))
-        if not c.fetchone():
-            c.execute("""
-                INSERT INTO cases (incident_id, status, created_at, updated_at, resolved_at, resolution_summary)
-                VALUES (?, 'resolved', ?, ?, ?, ?)
-            """, (id, now, now, now, summary))
-        else:
-            c.execute("""
-                UPDATE cases 
-                SET status = 'resolved', resolved_at = COALESCE(resolved_at, ?), resolution_summary = ?, updated_at = ?
-                WHERE incident_id = ?
-            """, (now, summary, now, id))
-
-        c.execute("""
-            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
-            VALUES (?, ?, ?, 'incident_resolved', 'unresolved', 'resolved', ?, ?)
-        """, (id, session.get("user_id", 1), session.get("username", "admin"), summary, now))
-
-        conn.commit()
-        conn.close()
-
-        return jsonify({
-            "status": "success",
-            "message": f"Incident {id} resolved successfully",
-            "id": id
-        }), 200
-
-    @app.route("/api/incidents/clear", methods=["POST"])
-    @app.route("/clear_logs", methods=["POST"])
-    @admin_required
-    def clear_logs():
-        data = request.get_json(silent=True) or {}
-        force_purge = isinstance(data, dict) and data.get("force_purge_investigations") is True
-
-        conn = get_db_connection(app.config["DATABASE_PATH"])
-        c = conn.cursor()
-
-        # Check if active investigation notes, evidence, or open cases exist
-        c.execute("SELECT COUNT(*) FROM incident_notes")
-        notes_count = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM incident_evidence")
-        evidence_count = c.fetchone()[0]
-
-        if (notes_count > 0 or evidence_count > 0) and not force_purge:
-            conn.close()
-            return jsonify({
-                "status": "fail",
-                "error": "Active investigation cases or audit records exist. Set force_purge_investigations=true to permanently purge all cases, notes, evidence, and audit logs."
-            }), 400
-
-        # Transactional purge of investigation data and incident logs
-        c.execute("DELETE FROM incident_audit_log")
-        c.execute("DELETE FROM incident_evidence")
-        c.execute("DELETE FROM incident_notes")
-        c.execute("DELETE FROM cases")
-        c.execute("DELETE FROM logs")
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "success", "message": "All incident logs and investigation records cleared"}), 200
-
     # ---------------------------------------------------------
-    # Sprint 2: SOC Investigation & Case Management Endpoints
+    # Sprint 2: SOC Investigation & Case Management Core Engine
     # ---------------------------------------------------------
 
     VALID_STATUS_TRANSITIONS = {
@@ -990,7 +939,9 @@ def create_app(test_config=None) -> Flask:
     }
 
     def _ensure_case_row(c, incident_id: int):
-        """Ensures a case row exists for an incident, creating one idempotently if missing."""
+        """Ensures a case row exists for an incident, creating one idempotently if missing.
+        Preserves historical resolution times as NULL (unknown) rather than setting to creation time.
+        """
         c.execute("SELECT * FROM cases WHERE incident_id = ?", (incident_id,))
         case_row = c.fetchone()
         if not case_row:
@@ -1000,12 +951,229 @@ def create_app(test_config=None) -> Flask:
                 st = "resolved" if log_row["resolved"] == 1 else "new"
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 c.execute("""
-                    INSERT INTO cases (incident_id, status, created_at, updated_at, resolved_at)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (incident_id, st, log_row["time"] or now, now, log_row["time"] if log_row["resolved"] == 1 else None))
+                    INSERT INTO cases (incident_id, status, created_at, updated_at, resolved_at, resolution_summary, reopen_count, version)
+                    VALUES (?, ?, ?, ?, NULL, ?, 0, 1)
+                """, (incident_id, st, log_row["time"] or now, now, 'Historical incident' if st == 'resolved' else None))
                 c.execute("SELECT * FROM cases WHERE incident_id = ?", (incident_id,))
                 case_row = c.fetchone()
         return case_row
+
+    def _perform_incident_resolution(conn, c, incident_id: int, user_id: int, user_role: str, user_name: str, summary: str, expected_version: int = None):
+        """
+        Unified incident resolution backend service.
+        Enforces:
+          1. Role-based authorization & case ownership (analyst A cannot resolve analyst B's incident)
+          2. Case lifecycle validation (must be currently in 'investigating' or 'contained')
+          3. Required resolution documentation (summary >= 5 characters)
+          4. Concurrency safety (optimistic locking)
+          5. Atomic updates to logs (resolved=1) and cases (status='resolved')
+          6. Chronological audit logging
+        """
+        c.execute("SELECT id, resolved FROM logs WHERE id = ?", (incident_id,))
+        log_row = c.fetchone()
+        if not log_row:
+            return jsonify({"error": "Not Found", "message": f"Incident {incident_id} not found"}), 404
+
+        case_row = _ensure_case_row(c, incident_id)
+        current_status = case_row["status"]
+        current_assignee_id = case_row["assigned_to"]
+        current_assignee_name = case_row["assigned_username"] or "unassigned"
+        current_version = case_row["version"]
+
+        # 1. Role-based authorization & Case ownership enforcement
+        if user_role != "admin":
+            if current_assignee_id is not None and current_assignee_id != user_id:
+                return jsonify({
+                    "error": "Forbidden",
+                    "message": f"Incident is assigned to @{current_assignee_name}. Only the assigned analyst or an administrator can resolve this incident."
+                }), 403
+            if current_assignee_id is None:
+                return jsonify({
+                    "error": "Forbidden",
+                    "message": "Incident is unassigned. An analyst must claim the incident and start investigation before resolving it."
+                }), 403
+
+        # 2. Case lifecycle validation (must be in 'investigating' or 'contained')
+        if current_status not in ("investigating", "contained"):
+            if current_status == "resolved":
+                return jsonify({
+                    "error": "Bad Request",
+                    "message": f"Incident {incident_id} is already resolved. Reopen the investigation before applying new resolution."
+                }), 400
+            else:
+                return jsonify({
+                    "error": "Bad Request",
+                    "message": f"Invalid status transition from '{current_status}' to 'resolved'. Incident must be in 'investigating' or 'contained' state before resolution."
+                }), 400
+
+        # 3. Required resolution documentation (>= 5 chars)
+        if not summary or not isinstance(summary, str) or len(summary.strip()) < 5:
+            return jsonify({
+                "error": "Bad Request",
+                "message": "A documented resolution summary of at least 5 characters is required to resolve a case."
+            }), 400
+        summary = summary.strip()[:2000]
+
+        # 4. Concurrency safety (Optimistic locking)
+        if expected_version is not None:
+            try:
+                expected_version = int(expected_version)
+                if expected_version != current_version:
+                    return jsonify({
+                        "error": "Conflict",
+                        "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}. Please reload latest state and retry.",
+                        "current_version": current_version
+                    }), 409
+            except (ValueError, TypeError):
+                pass
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 5. Atomic conditional update to both cases and logs
+        c.execute("""
+            UPDATE cases
+            SET status = 'resolved',
+                resolved_at = ?,
+                resolution_summary = ?,
+                updated_at = ?,
+                version = version + 1
+            WHERE incident_id = ? AND version = ? AND status = ?
+        """, (now, summary, now, incident_id, current_version, current_status))
+
+        if c.rowcount == 0:
+            return jsonify({
+                "error": "Conflict",
+                "message": "Concurrent update conflict detected. The case was modified by another operation.",
+                "current_version": current_version
+            }), 409
+
+        c.execute("UPDATE logs SET resolved = 1 WHERE id = ?", (incident_id,))
+
+        # 6. Audit logging
+        c.execute("""
+            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'incident_resolved', ?, 'resolved', ?, ?)
+        """, (incident_id, user_id, user_name, current_status, f"Case resolved by {user_name}. Summary: {summary}", now))
+
+        conn.commit()
+
+        c.execute("SELECT * FROM cases WHERE incident_id = ?", (incident_id,))
+        updated_case = dict(c.fetchone())
+
+        return jsonify({
+            "status": "success",
+            "message": f"Incident {incident_id} successfully resolved",
+            "case": updated_case,
+            "id": incident_id
+        }), 200
+
+    @app.route("/api/incidents/<int:id>/resolve", methods=["POST"])
+    @app.route("/resolve_incident/<int:id>", methods=["POST"])
+    @login_required
+    def resolve_incident(id: int):
+        data = request.get_json(silent=True) or {}
+        summary = None
+        expected_version = None
+        if isinstance(data, dict):
+            summary = data.get("resolution_summary") or data.get("summary")
+            expected_version = data.get("version")
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        user_role = session.get("role", "analyst")
+        user_id = session.get("user_id")
+        user_name = session.get("username", "analyst")
+
+        resp, code = _perform_incident_resolution(conn, c, id, user_id, user_role, user_name, summary, expected_version)
+        conn.close()
+        return resp, code
+
+    @app.route("/api/incidents/clear", methods=["POST"])
+    @app.route("/clear_logs", methods=["POST"])
+    @admin_required
+    def clear_logs():
+        data = request.get_json(silent=True) or {}
+        force_purge = isinstance(data, dict) and data.get("force_purge_investigations") is True
+        purge_reason = (data.get("purge_reason") if isinstance(data, dict) else "") or ""
+        purge_reason = str(purge_reason).strip()
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("SELECT COUNT(*) FROM logs")
+        logs_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM cases")
+        cases_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM cases WHERE status != 'resolved'")
+        active_cases = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM incident_notes")
+        notes_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM incident_evidence")
+        evidence_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM incident_audit_log")
+        audit_count = c.fetchone()[0]
+
+        total_incident_records = logs_count + cases_count + notes_count + evidence_count + audit_count
+
+        if total_incident_records > 0:
+            if not force_purge:
+                conn.close()
+                return jsonify({
+                    "status": "fail",
+                    "error": "Incident records and case history exist. Purge requires administrative authorization with 'force_purge_investigations': true and a mandatory 'purge_reason' (at least 5 characters).",
+                    "existing_records": {
+                        "logs": logs_count,
+                        "cases": cases_count,
+                        "active_cases": active_cases,
+                        "notes": notes_count,
+                        "evidence": evidence_count,
+                        "audit_entries": audit_count
+                    }
+                }), 400
+
+            if len(purge_reason) < 5:
+                conn.close()
+                return jsonify({
+                    "status": "fail",
+                    "error": "Administrative purge requires a documented 'purge_reason' of at least 5 characters explaining the justification for clearing SOC history."
+                }), 400
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        admin_id = session.get("user_id", 1)
+        admin_username = session.get("username", "admin")
+
+        # Persist system-level administrative audit log entry BEFORE wiping incident data
+        import json
+        c.execute("""
+            INSERT INTO system_audit_log (actor_id, actor_username, action, target, reason, details, created_at)
+            VALUES (?, ?, 'administrative_purge', 'incidents_and_cases', ?, ?, ?)
+        """, (admin_id, admin_username, purge_reason or "System log reset", json.dumps({
+            "purged_logs": logs_count,
+            "purged_cases": cases_count,
+            "purged_notes": notes_count,
+            "purged_evidence": evidence_count,
+            "purged_audit_entries": audit_count
+        }), now))
+
+        # Transactional purge of investigation data and incident logs
+        c.execute("DELETE FROM incident_audit_log")
+        c.execute("DELETE FROM incident_evidence")
+        c.execute("DELETE FROM incident_notes")
+        c.execute("DELETE FROM cases")
+        c.execute("DELETE FROM logs")
+        conn.commit()
+        conn.close()
+        return jsonify({
+            "status": "success",
+            "message": "All incident logs and investigation records cleared",
+            "purged_records": {
+                "logs": logs_count,
+                "cases": cases_count,
+                "notes": notes_count,
+                "evidence": evidence_count,
+                "audit_entries": audit_count
+            }
+        }), 200
 
     @app.route("/api/incidents/<int:id>/case", methods=["GET"])
     @login_required
@@ -1129,15 +1297,30 @@ def create_app(test_config=None) -> Flask:
         # Validate required documentation
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Delegate resolution to unified resolution engine
         if target_status == "resolved":
-            if not resolution_summary or not isinstance(resolution_summary, str) or len(resolution_summary.strip()) < 5:
-                conn.close()
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "A documented resolution summary of at least 5 characters is required to resolve a case."
-                }), 400
-            resolution_summary = resolution_summary.strip()[:2000]
+            resp, code = _perform_incident_resolution(conn, c, id, user_id, user_role, user_name, resolution_summary, data.get("version"))
+            conn.close()
+            return resp, code
 
+        # Concurrency safety: optimistic locking check
+        expected_version = data.get("version")
+        current_version = case_row["version"]
+        if expected_version is not None:
+            try:
+                expected_version = int(expected_version)
+                if expected_version != current_version:
+                    conn.close()
+                    return jsonify({
+                        "error": "Conflict",
+                        "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}. Please reload latest state and retry.",
+                        "current_version": current_version
+                    }), 409
+            except (ValueError, TypeError):
+                pass
+
+        # Execute transition in atomic transaction
+        auto_assigned = False
         if current_status == "resolved" and target_status == "investigating":
             if not reopen_reason or not isinstance(reopen_reason, str) or len(reopen_reason.strip()) < 5:
                 conn.close()
@@ -1147,9 +1330,24 @@ def create_app(test_config=None) -> Flask:
                 }), 400
             reopen_reason = reopen_reason.strip()[:2000]
 
-        # Execute transition in atomic transaction
-        auto_assigned = False
-        if current_status == "new" and target_status == "investigating" and current_assignee_id is None:
+            c.execute("""
+                UPDATE cases
+                SET status = 'investigating',
+                    resolved_at = NULL,
+                    reopen_count = reopen_count + 1,
+                    version = version + 1,
+                    updated_at = ?
+                WHERE incident_id = ? AND version = ? AND status = 'resolved'
+            """, (now, id, current_version))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": "Concurrent update conflict detected.",
+                    "current_version": current_version
+                }), 409
+            c.execute("UPDATE logs SET resolved = 0 WHERE id = ?", (id,))
+        elif current_status == "new" and target_status == "investigating" and current_assignee_id is None:
             # Auto-claim unassigned case when analyst starts investigating
             c.execute("""
                 UPDATE cases
@@ -1158,9 +1356,17 @@ def create_app(test_config=None) -> Flask:
                     assigned_username = ?,
                     assigned_at = ?,
                     investigation_started_at = COALESCE(investigation_started_at, ?),
-                    updated_at = ?
-                WHERE incident_id = ?
-            """, (user_id, user_name, now, now, now, id))
+                    updated_at = ?,
+                    version = version + 1
+                WHERE incident_id = ? AND version = ? AND status = 'new'
+            """, (user_id, user_name, now, now, now, id, current_version))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": "Concurrent update conflict detected.",
+                    "current_version": current_version
+                }), 409
             auto_assigned = True
             c.execute("UPDATE logs SET resolved = 0 WHERE id = ?", (id,))
         elif target_status == "investigating":
@@ -1169,29 +1375,35 @@ def create_app(test_config=None) -> Flask:
                 SET status = 'investigating',
                     investigation_started_at = COALESCE(investigation_started_at, ?),
                     resolved_at = NULL,
-                    updated_at = ?
-                WHERE incident_id = ?
-            """, (now, now, id))
+                    updated_at = ?,
+                    version = version + 1
+                WHERE incident_id = ? AND version = ? AND status = ?
+            """, (now, now, id, current_version, current_status))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": "Concurrent update conflict detected.",
+                    "current_version": current_version
+                }), 409
             c.execute("UPDATE logs SET resolved = 0 WHERE id = ?", (id,))
         elif target_status == "contained":
             c.execute("""
                 UPDATE cases
                 SET status = 'contained',
                     contained_at = ?,
-                    updated_at = ?
-                WHERE incident_id = ?
-            """, (now, now, id))
+                    updated_at = ?,
+                    version = version + 1
+                WHERE incident_id = ? AND version = ? AND status = ?
+            """, (now, now, id, current_version, current_status))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": "Concurrent update conflict detected.",
+                    "current_version": current_version
+                }), 409
             c.execute("UPDATE logs SET resolved = 0 WHERE id = ?", (id,))
-        elif target_status == "resolved":
-            c.execute("""
-                UPDATE cases
-                SET status = 'resolved',
-                    resolved_at = ?,
-                    resolution_summary = ?,
-                    updated_at = ?
-                WHERE incident_id = ?
-            """, (now, resolution_summary, now, id))
-            c.execute("UPDATE logs SET resolved = 1 WHERE id = ?", (id,))
 
         # Record Audit Log Entries
         action_name = "status_change"
@@ -1261,6 +1473,21 @@ def create_app(test_config=None) -> Flask:
         caller_name = session.get("username", "analyst")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        expected_version = data.get("version")
+        current_version = case_row["version"]
+        if expected_version is not None:
+            try:
+                expected_version = int(expected_version)
+                if expected_version != current_version:
+                    conn.close()
+                    return jsonify({
+                        "error": "Conflict",
+                        "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}.",
+                        "current_version": current_version
+                    }), 409
+            except (ValueError, TypeError):
+                pass
+
         if unassign or target_uid is None and not target_user_str:
             # Unassign logic
             if caller_role != "admin" and current_assignee_id != caller_id:
@@ -1272,9 +1499,16 @@ def create_app(test_config=None) -> Flask:
 
             c.execute("""
                 UPDATE cases
-                SET assigned_to = NULL, assigned_username = NULL, assigned_at = NULL, updated_at = ?
-                WHERE incident_id = ?
-            """, (now, id))
+                SET assigned_to = NULL, assigned_username = NULL, assigned_at = NULL, updated_at = ?, version = version + 1
+                WHERE incident_id = ? AND version = ?
+            """, (now, id, current_version))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": "Concurrent assignment conflict detected.",
+                    "current_version": current_version
+                }), 409
 
             c.execute("""
                 INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
@@ -1327,9 +1561,16 @@ def create_app(test_config=None) -> Flask:
 
         c.execute("""
             UPDATE cases
-            SET assigned_to = ?, assigned_username = ?, assigned_at = ?, updated_at = ?
-            WHERE incident_id = ?
-        """, (target_id, target_name, now, now, id))
+            SET assigned_to = ?, assigned_username = ?, assigned_at = ?, updated_at = ?, version = version + 1
+            WHERE incident_id = ? AND version = ?
+        """, (target_id, target_name, now, now, id, current_version))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": "Concurrent assignment conflict detected.",
+                "current_version": current_version
+            }), 409
 
         c.execute("""
             INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
@@ -1386,11 +1627,33 @@ def create_app(test_config=None) -> Flask:
             conn.close()
             return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
 
-        _ensure_case_row(c, id)
-
+        case_row = _ensure_case_row(c, id)
+        current_assignee_id = case_row["assigned_to"]
+        current_assignee_name = case_row["assigned_username"] or "unassigned"
+        caller_role = session.get("role", "analyst")
         author_id = session["user_id"]
         author_name = session.get("username", "analyst")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Ownership enforcement: only assigned analyst or admin can modify owned case
+        if caller_role != "admin":
+            if current_assignee_id is not None and current_assignee_id != author_id:
+                conn.close()
+                return jsonify({
+                    "error": "Forbidden",
+                    "message": f"Incident is assigned to @{current_assignee_name}. Only the assigned analyst or an administrator can add investigation notes."
+                }), 403
+            if current_assignee_id is None:
+                # Auto-claim unassigned case when adding a note
+                c.execute("""
+                    UPDATE cases
+                    SET assigned_to = ?, assigned_username = ?, assigned_at = ?, updated_at = ?, version = version + 1
+                    WHERE incident_id = ?
+                """, (author_id, author_name, now, now, id))
+                c.execute("""
+                    INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+                    VALUES (?, ?, ?, 'assignment_change', 'unassigned', ?, 'Auto-claimed upon note creation', ?)
+                """, (id, author_id, author_name, author_name, now))
 
         c.execute("""
             INSERT INTO incident_notes (incident_id, author_id, author_username, content, created_at, updated_at)
@@ -1399,7 +1662,7 @@ def create_app(test_config=None) -> Flask:
         note_id = c.lastrowid
 
         c.execute("""
-            UPDATE cases SET updated_at = ? WHERE incident_id = ?
+            UPDATE cases SET updated_at = ?, version = version + 1 WHERE incident_id = ?
         """, (now, id))
 
         c.execute("""
@@ -1468,10 +1731,29 @@ def create_app(test_config=None) -> Flask:
             source_ref = ""
         source_ref = source_ref.strip()[:500]
 
-        # Security check: reject executable or dangerous URL schemes
+        # Distinguish validated HTTP(S) URLs from ordinary non-URL evidence identifiers
         lower_ref = source_ref.lower()
-        if lower_ref.startswith(("javascript:", "data:", "vbscript:", "file:")):
-            return jsonify({"error": "Bad Request", "message": "Invalid or unsafe evidence reference format"}), 400
+        FORBIDDEN_SCHEMES = ("javascript:", "data:", "vbscript:", "file:", "blob:", "ftp:", "about:")
+        if any(lower_ref.startswith(s) for s in FORBIDDEN_SCHEMES):
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Invalid or unsafe evidence reference format. Dangerous URI schemes are forbidden."
+            }), 400
+
+        # If reference contains a URL scheme (e.g. '://') validate that it is HTTP or HTTPS with a valid host
+        if "://" in source_ref:
+            import urllib.parse
+            parsed = urllib.parse.urlparse(source_ref)
+            if parsed.scheme.lower() not in ("http", "https"):
+                return jsonify({
+                    "error": "Bad Request",
+                    "message": f"Unsupported URL scheme '{parsed.scheme}'. Only http:// and https:// URLs are allowed."
+                }), 400
+            if not parsed.netloc:
+                return jsonify({
+                    "error": "Bad Request",
+                    "message": "Malformed URL reference: missing hostname or domain."
+                }), 400
 
         if not isinstance(description, str):
             description = ""
@@ -1485,11 +1767,33 @@ def create_app(test_config=None) -> Flask:
             conn.close()
             return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
 
-        _ensure_case_row(c, id)
-
+        case_row = _ensure_case_row(c, id)
+        current_assignee_id = case_row["assigned_to"]
+        current_assignee_name = case_row["assigned_username"] or "unassigned"
+        caller_role = session.get("role", "analyst")
         author_id = session["user_id"]
         author_name = session.get("username", "analyst")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Ownership enforcement: only assigned analyst or admin can attach evidence
+        if caller_role != "admin":
+            if current_assignee_id is not None and current_assignee_id != author_id:
+                conn.close()
+                return jsonify({
+                    "error": "Forbidden",
+                    "message": f"Incident is assigned to @{current_assignee_name}. Only the assigned analyst or an administrator can attach evidence."
+                }), 403
+            if current_assignee_id is None:
+                # Auto-claim unassigned case when attaching evidence
+                c.execute("""
+                    UPDATE cases
+                    SET assigned_to = ?, assigned_username = ?, assigned_at = ?, updated_at = ?, version = version + 1
+                    WHERE incident_id = ?
+                """, (author_id, author_name, now, now, id))
+                c.execute("""
+                    INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+                    VALUES (?, ?, ?, 'assignment_change', 'unassigned', ?, 'Auto-claimed upon evidence attachment', ?)
+                """, (id, author_id, author_name, author_name, now))
 
         c.execute("""
             INSERT INTO incident_evidence (incident_id, title, evidence_type, source_ref, description, added_by_id, added_by_username, created_at)
@@ -1498,7 +1802,7 @@ def create_app(test_config=None) -> Flask:
         evidence_id = c.lastrowid
 
         c.execute("""
-            UPDATE cases SET updated_at = ? WHERE incident_id = ?
+            UPDATE cases SET updated_at = ?, version = version + 1 WHERE incident_id = ?
         """, (now, id))
 
         c.execute("""
@@ -1663,7 +1967,7 @@ def create_app(test_config=None) -> Flask:
         """)
         critical_unresolved = c.fetchone()[0]
 
-        # Average resolution duration
+        # Average resolution duration: exclude unavailable (NULL) or untrustworthy (diff <= 0 or resolved_at == created_at) timestamps
         c.execute("""
             SELECT created_at, investigation_started_at, resolved_at 
             FROM cases 
@@ -1674,13 +1978,17 @@ def create_app(test_config=None) -> Flask:
         durations = []
         for r in resolved_rows:
             try:
-                res_time = datetime.strptime(r["resolved_at"], "%Y-%m-%d %H:%M:%S")
-                start_str = r["investigation_started_at"] or r["created_at"]
-                if start_str:
-                    start_time = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
-                    diff = (res_time - start_time).total_seconds()
-                    if diff >= 0:
-                        durations.append(diff)
+                res_str = r["resolved_at"]
+                created_str = r["created_at"]
+                start_str = r["investigation_started_at"] or created_str
+                # Exclude if resolution timestamp equals creation timestamp (indicates untrustworthy / legacy bulk resolved)
+                if not res_str or res_str == created_str:
+                    continue
+                res_time = datetime.strptime(res_str, "%Y-%m-%d %H:%M:%S")
+                start_time = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+                diff = (res_time - start_time).total_seconds()
+                if diff > 0:
+                    durations.append(diff)
             except Exception:
                 pass
 

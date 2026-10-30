@@ -107,7 +107,7 @@
         const statusBadge = getStatusBadge(item.status);
         const sourceBadge = item.is_simulated
           ? '<span class="badge badge-simulated">Simulated</span>'
-          : '<span class="badge badge-telemetry">Telemetry</span>';
+          : '<span class="badge badge-telemetry">System Event</span>';
 
         return `
           <tr data-case-id="${item.id}" class="clickable-row">
@@ -194,7 +194,13 @@
 
     if (idEl) idEl.textContent = `#${incident.id}`;
     if (attackEl) attackEl.textContent = incident.attack;
-    if (statusPillEl) statusPillEl.innerHTML = getStatusBadge(cData.status);
+    if (statusPillEl) {
+      let badgeHtml = getStatusBadge(cData.status);
+      if (cData.reopen_count && cData.reopen_count > 0) {
+        badgeHtml += ` <span class="badge badge-warning" style="font-size: 11px; margin-left: 6px;" title="Case reopened ${cData.reopen_count} time(s)">Reopened (${cData.reopen_count})</span>`;
+      }
+      statusPillEl.innerHTML = badgeHtml;
+    }
     if (sevPillEl) {
       const sevClass = getSeverityClass(incident.risk);
       const sevLabel = getSeverityLabel(incident.risk);
@@ -203,7 +209,7 @@
     }
     if (provPillEl) {
       provPillEl.className = incident.is_simulated ? 'badge badge-simulated' : 'badge badge-telemetry';
-      provPillEl.textContent = incident.is_simulated ? 'Simulated Incident' : 'Telemetry Ingestion';
+      provPillEl.textContent = incident.is_simulated ? 'Simulated Incident' : 'Internal System Event';
     }
     if (assigneeNameEl) {
       assigneeNameEl.textContent = cData.assigned_username ? `@${cData.assigned_username}` : 'Unassigned';
@@ -515,6 +521,9 @@
 
     try {
       const payload = { status: targetStatus };
+      if (currentCaseData && currentCaseData.case && currentCaseData.case.version) {
+        payload.version = currentCaseData.case.version;
+      }
       if (resolutionSummary) payload.resolution_summary = resolutionSummary;
       if (reopenReason) payload.reopen_reason = reopenReason;
 
@@ -527,6 +536,11 @@
       }
     } catch (err) {
       console.error('[Investigation] Status transition failed:', err);
+      if (err.status === 409) {
+        window.UI.showToast('Concurrent update conflict: this case was modified by another operation. Reloading latest state...', 'warning');
+        await refreshCaseData();
+        return;
+      }
       window.UI.showToast(err.message || 'Status transition failed', 'error');
     }
   }
@@ -535,17 +549,25 @@
     if (!currentCaseId) return;
 
     try {
+      const payload = targetUserId ? { assigned_to: parseInt(targetUserId, 10) } : { unassign: true };
+      if (currentCaseData && currentCaseData.case && currentCaseData.case.version) {
+        payload.version = currentCaseData.case.version;
+      }
+      await window.API.cases.assign(currentCaseId, payload);
       if (targetUserId) {
-        await window.API.cases.assign(currentCaseId, { assigned_to: parseInt(targetUserId, 10) });
         window.UI.showToast(`Case #${currentCaseId} assigned successfully`, 'success');
       } else {
-        await window.API.cases.assign(currentCaseId, { unassign: true });
         window.UI.showToast(`Case #${currentCaseId} unassigned`, 'info');
       }
 
       await refreshCaseData();
     } catch (err) {
       console.error('[Investigation] Assignment failed:', err);
+      if (err.status === 409) {
+        window.UI.showToast('Concurrent update conflict: assignment was modified by another user. Reloading latest state...', 'warning');
+        await refreshCaseData();
+        return;
+      }
       window.UI.showToast(err.message || 'Assignment failed', 'error');
     }
   }
