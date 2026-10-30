@@ -195,3 +195,4 @@
     handleLogout
   };
 })(window);
+
