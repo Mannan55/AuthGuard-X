@@ -172,13 +172,23 @@ def _build_incidents_query(
     conditions = []
     params = []
 
-    # --- Search filter (LIKE, parameterized) ---
+    # --- Search filter (ID exact/substring & text LIKE, parameterized) ---
     if search:
-        term = f"%{search}%"
-        conditions.append(
-            "(username LIKE ? OR attack LIKE ? OR behavior LIKE ?)"
-        )
-        params.extend([term, term, term])
+        raw_search = str(search).strip()
+        term = f"%{raw_search}%"
+        stripped_id = raw_search.lstrip("#").strip()
+        if stripped_id.isdigit():
+            # Exact numeric ID or substring match, plus text fields
+            exact_id = int(stripped_id)
+            conditions.append(
+                "(id = ? OR CAST(id AS TEXT) LIKE ? OR username LIKE ? OR attack LIKE ? OR behavior LIKE ?)"
+            )
+            params.extend([exact_id, f"%{stripped_id}%", term, term, term])
+        else:
+            conditions.append(
+                "(CAST(id AS TEXT) LIKE ? OR username LIKE ? OR attack LIKE ? OR behavior LIKE ?)"
+            )
+            params.extend([term, term, term, term])
 
     # --- Severity filter (maps to risk score ranges) ---
     if severity:

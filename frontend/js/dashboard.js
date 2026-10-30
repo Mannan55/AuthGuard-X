@@ -188,19 +188,33 @@
     'San Jose, USA'
   ];
 
-  async function triggerSimulation(attackName, risk, behavior) {
-    const randomCity = SIM_CITIES[Math.floor(Math.random() * SIM_CITIES.length)];
+  function parseRiskScore(val, defaultVal = 50) {
+    if (val === null || val === undefined || val === '') return defaultVal;
+    const parsed = Number(val);
+    if (!Number.isFinite(parsed) || isNaN(parsed)) return defaultVal;
+    const clamped = Math.round(parsed);
+    if (clamped < 0) return 0;
+    if (clamped > 100) return 100;
+    return clamped;
+  }
+
+  async function triggerSimulation(attackName, risk, behavior, customCity = null) {
+    const selectedCity = (typeof customCity === 'string' && customCity.trim().length > 0)
+      ? customCity.trim()
+      : SIM_CITIES[Math.floor(Math.random() * SIM_CITIES.length)];
+    const validatedRisk = parseRiskScore(risk, 50);
+
     try {
       const res = await window.API.incidents.simulate({
         attack: attackName,
-        risk: Number(risk),
+        risk: validatedRisk,
         behavior: behavior,
         username: 'sim_agent',
         is_simulated: true,
-        simulated_location: randomCity
+        simulated_location: selectedCity
       });
 
-      window.UI.showToast(`Simulated: ${attackName} (Risk: ${risk})`, 'info');
+      window.UI.showToast(`Simulated: ${attackName} (Risk: ${validatedRisk})`, 'info');
 
       // Random map dot coordinates
       const randX = Math.random() * 80 + 10;
@@ -229,8 +243,8 @@
     const simButtons = document.querySelectorAll('[data-simulate]');
     simButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
-        const attack = btn.dataset.attack || 'Brute Force Spray';
-        const risk = parseInt(btn.dataset.risk, 10) || 75;
+        const attack = (btn.dataset.attack || 'Brute Force Spray').trim();
+        const risk = parseRiskScore(btn.dataset.risk, 75);
         const behavior = btn.dataset.behavior || 'automated';
         triggerSimulation(attack, risk, behavior);
       });
@@ -246,9 +260,10 @@
         const cityEl = document.getElementById('custom-sim-city');
 
         const attack = (attackEl && attackEl.value.trim()) || 'Custom Adversary Simulation';
-        const risk = parseInt(riskEl ? riskEl.value : 75, 10) || 75;
+        const rawRisk = riskEl ? riskEl.value : '';
+        const risk = parseRiskScore(rawRisk, 75);
         const behavior = behaviorEl ? behaviorEl.value : 'custom_vector';
-        const city = cityEl ? cityEl.value : 'Zurich, Switzerland';
+        const city = cityEl && cityEl.value ? cityEl.value.trim() : null;
         triggerSimulation(attack, risk, behavior, city);
       });
     }

@@ -290,11 +290,11 @@
             <!-- Threat Simulation Engine Card -->
             <div class="card">
               <div class="card-header">
-                <h3 class="card-title">Threat Simulation Vector Engine</h3>
-                <span class="badge badge-simulated">Training Telemetry</span>
+                <h3 class="card-title">Threat Simulation Engine</h3>
+                <span class="badge badge-simulated">Synthetic Incidents</span>
               </div>
               <p class="text-muted" style="font-size: var(--text-sm); margin-bottom: var(--space-3);">
-                Inject controlled attack telemetry into the incident queue to evaluate detection rules and response procedures.
+                Generate synthetic incident records with server-enforced provenance to evaluate SOC triage workflows and severity metrics.
               </p>
               <div class="sim-actions-grid">
                 <button class="btn btn-secondary btn-block" data-simulate data-attack="Brute Force Credential Spray" data-risk="85" data-behavior="high_velocity_login">
@@ -433,13 +433,13 @@
             <div class="card-header">
               <div>
                 <h3 class="card-title">Cyber Attack Simulation Lab</h3>
-                <span class="text-muted" style="font-size: var(--text-xs);">Controlled adversary emulation for SOC detection rule evaluation and analyst triage training</span>
+                <span class="text-muted" style="font-size: var(--text-xs);">Synthetic incident record generator for SOC analyst training and triage exercises</span>
               </div>
-              <span class="badge badge-simulated">Simulated Telemetry Pipeline</span>
+              <span class="badge badge-simulated">Synthetic Telemetry Generator</span>
             </div>
             <p class="text-muted" style="font-size: var(--text-sm); line-height: var(--leading-relaxed);">
-              Simulate adversary vectors to validate SOC ingestion pipelines, threshold triggers, and real-time response workflows. 
-              All simulated events are cryptographically isolated with <code>is_simulated = 1</code> and will not contaminate operational telemetry.
+              Simulate attack scenarios to populate the incident database with training telemetry. 
+              All simulation records are flagged with server-enforced provenance (<code>is_simulated = 1</code>) to distinguish synthetic exercise events from system audit logs.
             </p>
           </div>
 
@@ -449,7 +449,7 @@
             <!-- Pre-configured Attack Vectors -->
             <div class="card">
               <div class="card-header">
-                <h3 class="card-title">Adversary Vector Library</h3>
+                <h3 class="card-title">Adversary Scenario Library</h3>
                 <span class="text-muted" style="font-size: var(--text-xs);">One-click execution</span>
               </div>
               <div class="sim-vector-list" style="display: flex; flex-direction: column; gap: var(--space-3);">
@@ -458,15 +458,15 @@
                   <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
                     <div>
                       <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Brute Force Credential Spray</strong>
-                      <div class="text-muted" style="font-size: var(--text-xs);">Technique: T1110.003 • Distributed Authentication Spray</div>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Scenario: High-velocity authentication attempts against admin accounts.</div>
                     </div>
                     <span class="badge badge-critical">Critical (85)</span>
                   </div>
                   <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
-                    Fires a burst of rapid authentication attempts using common dictionary passwords against administrative accounts.
+                    Generates rapid authentication attempt logs using common passwords against administrative accounts.
                   </p>
                   <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Brute Force Credential Spray" data-risk="85" data-behavior="high_velocity_login">
-                    Launch Attack Simulation
+                    Simulate Incident Scenario
                   </button>
                 </div>
 
@@ -474,15 +474,15 @@
                   <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
                     <div>
                       <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Credential Stuffing Botnet</strong>
-                      <div class="text-muted" style="font-size: var(--text-xs);">Technique: T1110.004 • Automated Bot Spray</div>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Scenario: Automated bot traffic cycling credentials leaked from external breaches.</div>
                     </div>
                     <span class="badge badge-high">High (65)</span>
                   </div>
                   <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
-                    Emulates automated bot traffic cycling credentials leaked from external breaches against application users.
+                    Generates automated bot traffic records cycling credentials against application users.
                   </p>
                   <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Credential Stuffing Bot" data-risk="65" data-behavior="automated_stuffing">
-                    Launch Attack Simulation
+                    Simulate Incident Scenario
                   </button>
                 </div>
 
@@ -490,15 +490,15 @@
                   <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
                     <div>
                       <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Anomalous Geolocation Velocity</strong>
-                      <div class="text-muted" style="font-size: var(--text-xs);">Technique: T1078 • Geographic Impossibility</div>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Scenario: Consecutive logins from distant geographical locations within a brief timeframe.</div>
                     </div>
                     <span class="badge badge-low">Low (35)</span>
                   </div>
                   <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
-                    Generates session activity from geographically distant locations (e.g. Tokyo to London) within an impossible travel timeframe.
+                    Generates session records from distant geographical locations within an impossible travel timeframe.
                   </p>
                   <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Anomalous Geolocation Travel" data-risk="35" data-behavior="geographic_velocity">
-                    Launch Attack Simulation
+                    Simulate Incident Scenario
                   </button>
                 </div>
 
@@ -506,15 +506,15 @@
                   <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
                     <div>
                       <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">SQL Injection Exploit Probe</strong>
-                      <div class="text-muted" style="font-size: var(--text-xs);">Technique: T1190 • Exploit Public-Facing Application</div>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Scenario: Query parameter containing SQL injection pattern strings.</div>
                     </div>
                     <span class="badge badge-critical">Critical (90)</span>
                   </div>
                   <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
-                    Injects automated database probe syntax into input parameters to test input sanitization and parameterized query guards.
+                    Generates database probe event records with SQL syntax strings to test input handling and triage runbooks.
                   </p>
                   <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="SQL Injection Exploit Probe" data-risk="90" data-behavior="sqli_probe">
-                    Launch Attack Simulation
+                    Simulate Incident Scenario
                   </button>
                 </div>
 
@@ -528,7 +528,7 @@
                 <span class="text-muted" style="font-size: var(--text-xs);">Parameter customization</span>
               </div>
               <p class="text-muted" style="font-size: var(--text-sm); margin-bottom: var(--space-4);">
-                Configure custom parameters to test specific detection rules, threshold alerting, and incident triage runbooks.
+                Configure custom parameters to generate synthetic incident records with specific risk scores, attack vectors, and origin labels.
               </p>
               
               <form id="custom-simulation-form" class="form-stacked">
@@ -566,7 +566,7 @@
                 </div>
 
                 <button id="custom-sim-submit-btn" type="button" class="btn btn-primary btn-block" style="margin-top: var(--space-3);">
-                  Inject Custom Adversary Vector
+                  Generate Custom Incident Record
                 </button>
               </form>
             </div>

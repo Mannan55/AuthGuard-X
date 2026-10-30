@@ -228,8 +228,6 @@ def run_full_verification():
         """)
         oversized = [s for s in svg_stats if s['w'] > 40 or s['h'] > 40]
         print(f"  Audited {len(svg_stats)} SVGs in DOM. Oversized count: {len(oversized)}")
-        for s in svg_stats:
-            print(f"    SVG [{s['cls']}]: {s['w']}x{s['h']}px")
         assert len(oversized) == 0, f"Found oversized SVGs: {oversized}"
         passed_assertions += 1
         print("  -> Passed: All SVGs constrained within 16-24px (empty-icon 40px).")
@@ -250,7 +248,6 @@ def run_full_verification():
             })()
         """)
         for n in nav_stats:
-            print(f"    Nav [{n['text']}]: color={n['color']}, decoration={n['textDecoration']}")
             assert n['textDecoration'] == 'none', f"Link {n['text']} has underline"
             assert n['color'] != 'rgb(0, 0, 238)', f"Link {n['text']} has unstyled browser blue link color"
         passed_assertions += 1
@@ -270,26 +267,24 @@ def run_full_verification():
         """)
         time.sleep(0.8)
         rendered_health = browser.evaluate("document.getElementById('metric-health').textContent.trim()")
-        health_color = browser.evaluate("window.getComputedStyle(document.getElementById('metric-health')).color")
-        print(f"  Health Metric Text: '{rendered_health}', Computed Color: {health_color}")
         assert rendered_health == "0", f"Expected health score '0', got '{rendered_health}' (possible || 100 bug regression)"
         passed_assertions += 1
-        print("  -> Passed: Zero health score renders strictly as 0 with critical posture color.")
+        print("  -> Passed: Zero health score renders strictly as 0.")
 
-        # Re-trigger regular simulation telemetry
+        # Re-trigger regular simulation telemetry for overview view
         print("\n[+] Seeding Telemetry Simulations for Overview View...")
         browser.evaluate("window.Dashboard.triggerSimulation('Brute Force Credential Spray', 85, 'high_velocity_login');")
         time.sleep(1)
         browser.evaluate("window.Dashboard.triggerSimulation('Credential Stuffing Bot', 65, 'automated_stuffing');")
         time.sleep(1)
-        browser.evaluate("window.Dashboard.triggerSimulation('Suspicious Geolocation Travel', 35, 'geographic_velocity');")
+        browser.evaluate("window.Dashboard.triggerSimulation('Anomalous Geolocation Travel', 35, 'geographic_velocity');")
         time.sleep(2)
 
         # Capture Dashboard Overview screenshot
         browser.screenshot("02_dashboard_overview.png")
 
-        # ── Assertion 7: Dedicated Simulations View & Execution ───
-        print("\n[Assert 7] Verifying Dedicated Simulations View Navigation & Custom Vector Trigger...")
+        # ── Assertion 7: Dedicated Simulations View & Strengthened Custom Execution ───
+        print("\n[Assert 7] Verifying Dedicated Simulations View Navigation & Custom Vector Parameter Retention...")
         browser.evaluate("switchView('simulations');")
         time.sleep(1)
         sim_view_display = browser.evaluate("window.getComputedStyle(document.getElementById('view-simulations')).display")
@@ -300,21 +295,49 @@ def run_full_verification():
         assert "Simulation" in page_title, f"Page title should reflect simulation engine, got '{page_title}'"
         browser.screenshot("06_simulations_lab_view.png")
 
-        # Trigger custom vector
-        before_count = browser.evaluate("parseInt(document.getElementById('metric-total').textContent, 10) || 0")
-        browser.evaluate("""
-            document.getElementById('custom-sim-attack').value = 'Privilege Escalation Probe';
-            document.getElementById('custom-sim-risk').value = '92';
-            document.getElementById('custom-sim-submit-btn').click();
-        """)
-        time.sleep(2)
-        after_count = browser.evaluate("parseInt(document.getElementById('metric-total').textContent, 10) || 0")
-        assert after_count >= before_count, "Custom simulation should increment incident database"
-        passed_assertions += 1
-        print("  -> Passed: Dedicated Simulations view renders correctly and triggers custom vector telemetry.")
+        # Custom simulation submission with exact parameters (including custom city and risk score)
+        custom_test_res = browser.evaluate("""
+            (async () => {
+                const beforeTotal = parseInt(document.getElementById('metric-total').textContent, 10) || 0;
+                
+                document.getElementById('custom-sim-attack').value = 'Targeted Lateral Recon';
+                document.getElementById('custom-sim-risk').value = '82';
+                document.getElementById('custom-sim-behavior').value = 'lateral_traversal';
+                document.getElementById('custom-sim-city').value = 'Toronto, Canada';
+                document.getElementById('custom-sim-submit-btn').click();
+                
+                await new Promise(r => setTimeout(r, 1200));
 
-        # ── Assertion 8: Incidents Table Feed & Accurate Provenance
-        print("\n[Assert 8] Verifying Incidents Table View & Provenance Column...")
+                const afterTotal = parseInt(document.getElementById('metric-total').textContent, 10) || 0;
+                const latestRes = await window.API.incidents.list({ page: 1, per_page: 1, sort_by: 'id', sort_dir: 'desc' });
+                const latest = (latestRes && latestRes.incidents && latestRes.incidents[0]) || {};
+
+                // Also verify zero risk simulation is preserved without defaulting to 75
+                await window.Dashboard.triggerSimulation('Zero Severity Informational Scan', 0, 'benign_scan', 'Zurich, Switzerland');
+                await new Promise(r => setTimeout(r, 1000));
+                const zeroRes = await window.API.incidents.list({ page: 1, per_page: 1, sort_by: 'id', sort_dir: 'desc' });
+                const zeroIncident = (zeroRes && zeroRes.incidents && zeroRes.incidents[0]) || {};
+
+                return {
+                    beforeTotal,
+                    afterTotal,
+                    latest,
+                    zeroIncident
+                };
+            })()
+        """)
+        print(f"  Custom Simulation Result: count {custom_test_res['beforeTotal']} -> {custom_test_res['afterTotal']}")
+        assert custom_test_res["afterTotal"] == custom_test_res["beforeTotal"] + 1, "Count must increase by exactly 1"
+        assert custom_test_res["latest"]["attack"] == "Targeted Lateral Recon", "Attack name must match exact submitted value"
+        assert custom_test_res["latest"]["risk"] == 82, "Risk score must match exact submitted value (82)"
+        assert custom_test_res["latest"]["behavior"] == "lateral_traversal", "Behavior must match exact submitted value"
+        assert "Toronto, Canada" in custom_test_res["latest"]["location"], "Location must contain submitted city"
+        assert custom_test_res["zeroIncident"]["risk"] == 0, "Risk 0 must be preserved without defaulting to fallback"
+        passed_assertions += 1
+        print("  -> Passed: Custom simulation retained exact submitted attack name, risk (82), behavior, and selected city (Toronto, Canada).")
+
+        # ── Assertion 8: Incidents Table Feed, Provenance Column & Working ID Search ───
+        print("\n[Assert 8] Verifying Incidents Table View, Provenance Column & Incident ID Search...")
         browser.evaluate("switchView('incidents');")
         time.sleep(1.5)
         incidents_view_display = browser.evaluate("window.getComputedStyle(document.getElementById('view-incidents')).display")
@@ -325,8 +348,38 @@ def run_full_verification():
 
         provenance_header = browser.evaluate("document.querySelectorAll('.data-table th')[1].textContent.trim()")
         assert provenance_header == "Provenance", f"Expected column header 'Provenance', got '{provenance_header}'"
+
+        # Test incident ID search (#ID)
+        id_search_res = browser.evaluate("""
+            (async () => {
+                const firstRowIdEl = document.querySelector('#incidents-tbody tr .detail-trigger, #incidents-tbody tr td:first-child');
+                const targetText = firstRowIdEl ? firstRowIdEl.textContent.trim() : '';
+                const cleanId = targetText.replace('#', '').trim();
+
+                const searchInput = document.getElementById('incidents-search-input');
+                searchInput.value = '#' + cleanId;
+                searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+                await new Promise(r => setTimeout(r, 600));
+
+                const filteredRows = Array.from(document.querySelectorAll('#incidents-tbody tr'));
+                const matchedIds = filteredRows.map(r => {
+                    const cell = r.querySelector('td:first-child');
+                    return cell ? cell.textContent.trim() : '';
+                });
+
+                // Clear search
+                searchInput.value = '';
+                searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                await new Promise(r => setTimeout(r, 500));
+
+                return { cleanId, matchedIds };
+            })()
+        """)
+        print(f"  Incident ID Search Result: searching for #{id_search_res['cleanId']} returned {id_search_res['matchedIds']}")
+        assert '#' + id_search_res["cleanId"] in id_search_res["matchedIds"], f"Search by ID #{id_search_res['cleanId']} should return incident"
         passed_assertions += 1
-        print(f"  -> Passed: Incidents table renders {row_count} rows with accurate 'Provenance' header.")
+        print(f"  -> Passed: Working incident ID search verified for #{id_search_res['cleanId']}.")
 
         # Capture Incidents Table screenshot
         browser.screenshot("03_incidents_table.png")
@@ -349,7 +402,6 @@ def run_full_verification():
         print("\n[Assert 10] Verifying Confirmation Dialog Promise Settlement (Escape, Backdrop, Cancel) & Focus Restoration...")
         dialog_test_result = browser.evaluate("""
             (async () => {
-                // Focus a specific dummy trigger button
                 const triggerBtn = document.getElementById('refresh-incidents-btn');
                 triggerBtn.focus();
                 const initialActiveId = document.activeElement.id;
@@ -359,7 +411,6 @@ def run_full_verification():
                     title: 'Test Escape',
                     message: 'Pressing escape should settle false'
                 });
-                // Simulate Escape keydown
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
                 const resEscape = await promiseEscape;
                 const postEscapeActiveId = document.activeElement.id;
@@ -390,7 +441,6 @@ def run_full_verification():
                 };
             })()
         """)
-        print(f"  Confirmation Dialog Audit: {dialog_test_result}")
         assert dialog_test_result["resEscape"] is False, "Escape must resolve showConfirmDialog to false"
         assert dialog_test_result["resCancel"] is False, "Cancel button must resolve to false"
         assert dialog_test_result["resConfirm"] is True, "Confirm button must resolve to true"
@@ -398,8 +448,8 @@ def run_full_verification():
         passed_assertions += 1
         print("  -> Passed: Confirmation dialog settles cleanly on all dismiss pathways with focus restoration.")
 
-        # ── Assertion 11: Multi-Viewport Responsive Layout ────────
-        print("\n[Assert 11] Verifying Responsive Breakpoints (1920, 1440, 768, 390px) Zero Horizontal Overflow...")
+        # ── Assertion 11: Multi-Viewport Responsive Layout & 390px Mobile Topbar ──
+        print("\n[Assert 11] Verifying Responsive Breakpoints & 390px Topbar Non-Overlapping Elements...")
         browser.evaluate("switchView('overview');")
         time.sleep(1)
 
@@ -422,8 +472,35 @@ def run_full_verification():
             """)
             print(f"    {name} ({w}x{h}): scrollWidth={overflow['docW']}, innerWidth={overflow['winW']}, hasHScroll={overflow['hasHScroll']}")
             assert not overflow['hasHScroll'], f"Horizontal scroll detected on {name}: {overflow}"
+
+        # Test mobile topbar elements bounding boxes do not overlap on 390px
+        topbar_collision_test = browser.evaluate("""
+            (() => {
+                const toggle = document.getElementById('mobile-sidebar-toggle').getBoundingClientRect();
+                const title = document.getElementById('page-title').getBoundingClientRect();
+                const badge = document.getElementById('env-badge').getBoundingClientRect();
+                const refresh = document.getElementById('refresh-incidents-btn').getBoundingClientRect();
+
+                const visible = toggle.width > 0 && title.width > 0 && badge.width > 0 && refresh.width > 0;
+                const badgeBeforeRefresh = badge.right <= refresh.left + 5;
+
+                return {
+                    visible,
+                    badgeBeforeRefresh,
+                    rects: {
+                        toggle: { left: Math.round(toggle.left), right: Math.round(toggle.right) },
+                        title: { left: Math.round(title.left), right: Math.round(title.right) },
+                        badge: { left: Math.round(badge.left), right: Math.round(badge.right) },
+                        refresh: { left: Math.round(refresh.left), right: Math.round(refresh.right) }
+                    }
+                };
+            })()
+        """)
+        print(f"  Mobile 390px Topbar Layout Check: {topbar_collision_test}")
+        assert topbar_collision_test["visible"], "All topbar elements must be visible on 390px"
+        assert topbar_collision_test["badgeBeforeRefresh"], "DEVELOPMENT/DEV badge must not overlap Refresh control on 390px"
         passed_assertions += 1
-        print("  -> Passed: Zero horizontal overflow across all 4 target breakpoints.")
+        print("  -> Passed: Zero horizontal overflow across all breakpoints, topbar controls cleanly separated on 390px.")
 
         # Capture Mobile Layout (390x844)
         browser.resize(390, 844)

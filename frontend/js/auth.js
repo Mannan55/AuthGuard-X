@@ -32,7 +32,7 @@
       const data = await window.API.auth.getSession();
       const envBadge = document.getElementById('env-badge');
       if (envBadge) {
-        envBadge.textContent = (data.environment || 'DEV').toUpperCase();
+        envBadge.textContent = (data.environment === 'development' ? 'DEV' : (data.environment || 'DEV')).toUpperCase();
       }
 
       if (data.authenticated && data.user) {

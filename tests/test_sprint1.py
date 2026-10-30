@@ -751,3 +751,64 @@ def test_metrics_today_count(authed_env):
     data = res.get_json()
     assert data["today_count"] >= 1
 
+
+# ---------------------------------------------------------------------------
+# Sprint 1 QA Regression Tests (ID Search, Risk 0, Custom City)
+# ---------------------------------------------------------------------------
+
+def test_incidents_search_by_id_numeric(authed_env):
+    """Searching by exact numeric ID returns the target incident."""
+    client, _, _ = authed_env
+    res1 = _post_incident(client, attack="Search Target Alpha", risk=45)
+    target_id = res1.get_json()["incident"]["id"]
+
+    res_search = client.get(f"/api/incidents?page=1&search={target_id}")
+    assert res_search.status_code == 200
+    data = res_search.get_json()
+    items = data.get("incidents", data) if isinstance(data, dict) else data
+    assert len(items) >= 1
+    assert any(item["id"] == target_id for item in items)
+
+
+def test_incidents_search_by_hash_id(authed_env):
+    """Searching by '#ID' (e.g. #12) correctly strips the prefix and matches."""
+    client, _, _ = authed_env
+    res1 = _post_incident(client, attack="Search Target Beta", risk=55)
+    target_id = res1.get_json()["incident"]["id"]
+
+    res_search = client.get(f"/api/incidents?page=1&search=%23{target_id}")
+    assert res_search.status_code == 200
+    data = res_search.get_json()
+    items = data.get("incidents", data) if isinstance(data, dict) else data
+    assert len(items) >= 1
+    assert any(item["id"] == target_id for item in items)
+
+
+def test_simulate_preserves_risk_zero(authed_env):
+    """Simulate endpoint must preserve risk score 0 without defaulting to fallback."""
+    client, _, _ = authed_env
+    res = client.post("/api/incidents/simulate", json={
+        "attack": "Informational Probe",
+        "risk": 0,
+        "behavior": "benign_scan"
+    })
+    assert res.status_code == 201
+    data = res.get_json()["incident"]
+    assert data["risk"] == 0
+    assert data["attack"] == "Informational Probe"
+
+
+def test_simulate_respects_custom_city(authed_env):
+    """Simulate endpoint uses provided simulated_location over random selection."""
+    client, _, _ = authed_env
+    custom_city = "Toronto, Canada"
+    res = client.post("/api/incidents/simulate", json={
+        "attack": "Targeted Exfiltration",
+        "risk": 78,
+        "behavior": "data_transfer",
+        "simulated_location": custom_city
+    })
+    assert res.status_code == 201
+    data = res.get_json()["incident"]
+    assert "Toronto, Canada" in data["location"]
+
