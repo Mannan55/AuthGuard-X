@@ -590,17 +590,23 @@ def run_full_verification():
                 const isInvestigating = document.getElementById('step-node-investigating').classList.contains('active');
 
                 // 4. Add persistent note
-                await window.API.cases.addNote(incId, "Forensic analysis: extracted Kerberos SPN ticket requests across service accounts.");
+                const noteVer = window.Investigation.getCurrentCaseVersion(incId);
+                await window.API.cases.addNote(incId, {
+                    content: "Forensic analysis: extracted Kerberos SPN ticket requests across service accounts.",
+                    version: noteVer
+                });
                 await window.Investigation.refreshCaseData();
                 await new Promise(r => setTimeout(r, 600));
                 const notesCount = document.querySelectorAll('#case-notes-list .note-card').length;
 
                 // 5. Add evidence metadata reference
+                const evVer = window.Investigation.getCurrentCaseVersion(incId);
                 await window.API.cases.addEvidence(incId, {
                     title: "Captured SPN Ticket Hashes",
                     evidence_type: "hash_indicator",
                     source_ref: "SHA256:d41d8cd98f00b204e9800998ecf8427e",
-                    description: "Encrypted TGS ticket response extracted from domain controller network trace."
+                    description: "Encrypted TGS ticket response extracted from domain controller network trace.",
+                    version: evVer
                 });
                 await window.Investigation.refreshCaseData();
                 await new Promise(r => setTimeout(r, 600));
@@ -663,7 +669,7 @@ def run_full_verification():
                 const incId = sim.incident.id;
 
                 // Assign to analyst_john
-                await window.API.cases.assign(incId, { username: "analyst_john" });
+                await window.API.cases.assign(incId, { username: "analyst_john", version: 1 });
 
                 // 2. Log in as analyst_john
                 await window.API.auth.logout();
@@ -677,7 +683,7 @@ def run_full_verification():
                 // 4. Try unauthorized reassignment to analyst_jane (should fail with 403)
                 let blockedUnauthorized = false;
                 try {
-                    await window.API.cases.assign(incId, { username: "analyst_jane" });
+                    await window.API.cases.assign(incId, { username: "analyst_jane", version: 2 });
                 } catch (err) {
                     if (err.status === 403) blockedUnauthorized = true;
                 }

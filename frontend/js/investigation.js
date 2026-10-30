@@ -716,11 +716,17 @@
 
         try {
           noteSubmitBtn.disabled = true;
-          await window.API.cases.addNote(currentCaseId, content);
+          const caseVer = currentCaseData && currentCaseData.case ? currentCaseData.case.version : 1;
+          await window.API.cases.addNote(currentCaseId, { content, version: caseVer });
           noteInput.value = '';
           window.UI.showToast('Investigation note saved', 'success');
           await refreshCaseData();
         } catch (err) {
+          if (err.status === 409) {
+            window.UI.showToast('Concurrent update conflict: this case was modified by another operation. Reloading latest state...', 'warning');
+            await refreshCaseData();
+            return;
+          }
           window.UI.showToast(err.message || 'Failed to save note', 'error');
         } finally {
           noteSubmitBtn.disabled = false;
@@ -749,11 +755,13 @@
 
         try {
           evSubmitBtn.disabled = true;
+          const caseVer = currentCaseData && currentCaseData.case ? currentCaseData.case.version : 1;
           await window.API.cases.addEvidence(currentCaseId, {
             title,
             evidence_type,
             source_ref,
-            description
+            description,
+            version: caseVer
           });
 
           if (titleEl) titleEl.value = '';
@@ -763,6 +771,11 @@
           window.UI.showToast('Evidence metadata attached', 'success');
           await refreshCaseData();
         } catch (err) {
+          if (err.status === 409) {
+            window.UI.showToast('Concurrent update conflict: this case was modified by another operation. Reloading latest state...', 'warning');
+            await refreshCaseData();
+            return;
+          }
           window.UI.showToast(err.message || 'Failed to attach evidence', 'error');
         } finally {
           evSubmitBtn.disabled = false;
@@ -777,6 +790,15 @@
     } catch (e) {
       console.warn('[Investigation] Failed to load analysts list:', e);
     }
+  }
+
+  function getCurrentCaseVersion(id) {
+    if (currentCaseData && currentCaseData.case) {
+      if (!id || currentCaseData.case.incident_id === parseInt(id, 10)) {
+        return currentCaseData.case.version || 1;
+      }
+    }
+    return 1;
   }
 
   // ── 5. Public API ───────────────────────────────────────────────────────
@@ -798,6 +820,7 @@
     loadWorkQueue,
     openCase,
     refreshCaseData,
+    getCurrentCaseVersion,
     executeStatusTransition,
     executeAssignment
   };

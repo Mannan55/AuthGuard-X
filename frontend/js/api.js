@@ -186,33 +186,69 @@
         return apiFetch(`/api/incidents/${id}/case`);
       },
       async updateStatus(id, payload) {
+        const body = typeof payload === 'object' ? { ...payload } : { status: payload };
+        if (body.version === undefined) {
+          if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
+            body.version = window.Investigation.getCurrentCaseVersion(id);
+          } else {
+            body.version = 1;
+          }
+        }
         return apiFetch(`/api/incidents/${id}/case`, {
           method: 'PATCH',
-          body: JSON.stringify(payload)
+          body: JSON.stringify(body)
         });
       },
       async assign(id, payload) {
+        const body = typeof payload === 'object' ? { ...payload } : {};
+        if (body.version === undefined) {
+          if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
+            body.version = window.Investigation.getCurrentCaseVersion(id);
+          } else {
+            body.version = 1;
+          }
+        }
         return apiFetch(`/api/incidents/${id}/assign`, {
           method: 'POST',
-          body: JSON.stringify(payload)
+          body: JSON.stringify(body)
         });
       },
       async getNotes(id) {
         return apiFetch(`/api/incidents/${id}/notes`);
       },
-      async addNote(id, content) {
+      async addNote(id, payload, version = null) {
+        const body = typeof payload === 'object' ? { ...payload } : { content: payload };
+        if (body.version === undefined) {
+          if (version !== null && version !== undefined) {
+            body.version = version;
+          } else if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
+            body.version = window.Investigation.getCurrentCaseVersion(id);
+          } else {
+            body.version = 1;
+          }
+        }
         return apiFetch(`/api/incidents/${id}/notes`, {
           method: 'POST',
-          body: JSON.stringify({ content })
+          body: JSON.stringify(body)
         });
       },
       async getEvidence(id) {
         return apiFetch(`/api/incidents/${id}/evidence`);
       },
-      async addEvidence(id, payload) {
+      async addEvidence(id, payload, version = null) {
+        const body = typeof payload === 'object' ? { ...payload } : {};
+        if (body.version === undefined) {
+          if (version !== null && version !== undefined) {
+            body.version = version;
+          } else if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
+            body.version = window.Investigation.getCurrentCaseVersion(id);
+          } else {
+            body.version = 1;
+          }
+        }
         return apiFetch(`/api/incidents/${id}/evidence`, {
           method: 'POST',
-          body: JSON.stringify(payload)
+          body: JSON.stringify(body)
         });
       },
       async getActivity(id) {

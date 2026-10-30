@@ -104,8 +104,8 @@
       const timeStr = window.UI.formatDate(inc.time);
 
       const actionBtn = inc.resolved
-        ? `<span class="text-muted" style="font-size:var(--text-xs);">Closed</span>`
-        : `<button class="btn btn-sm btn-secondary resolve-trigger" data-id="${inc.id}">Resolve</button>`;
+        ? `<span class="badge badge-subtle font-mono" style="font-size:var(--text-xs); color: var(--color-text-muted);">Resolved</span>`
+        : `<button class="btn btn-sm btn-primary investigate-trigger resolve-trigger" data-id="${inc.id}" title="Investigate in Workspace">Investigate</button>`;
 
       tr.innerHTML = `
         <td class="cell-id">#${window.UI.escapeHTML(inc.id)}</td>
@@ -118,7 +118,6 @@
         <td class="time-cell text-muted">${timeStr}</td>
         <td class="actions-cell">
           <div style="display:inline-flex;gap:4px;">
-            <button class="btn btn-sm btn-primary investigate-trigger" data-id="${inc.id}" title="Investigate in Workspace">Investigate</button>
             <button class="btn btn-sm btn-ghost view-detail-trigger" data-id="${inc.id}" title="View Details">Details</button>
             ${actionBtn}
           </div>
@@ -204,9 +203,10 @@
           resolveBtn.style.display = 'none';
         } else {
           resolveBtn.style.display = 'inline-flex';
-          resolveBtn.onclick = async () => {
-            await handleResolve(inc.id);
+          resolveBtn.textContent = 'Investigate & Resolve';
+          resolveBtn.onclick = () => {
             window.UI.closeModal('incident-modal');
+            handleResolve(inc.id);
           };
         }
       }
@@ -215,9 +215,7 @@
       if (investigateModalBtn) {
         investigateModalBtn.onclick = () => {
           window.UI.closeModal('incident-modal');
-          if (window.Investigation && window.Investigation.openCase) {
-            window.Investigation.openCase(inc.id);
-          }
+          handleResolve(inc.id);
         };
       }
 
@@ -227,25 +225,11 @@
     }
   }
 
-  async function handleResolve(id) {
-    const confirmed = await window.UI.showConfirmDialog({
-      title: 'Resolve Incident',
-      message: `Mark Incident #${id} as resolved and apply remediation status?`,
-      confirmText: 'Resolve Incident',
-      isDanger: false
-    });
-
-    if (!confirmed) return;
-
-    try {
-      await window.API.incidents.resolve(id);
-      window.UI.showToast(`Incident #${id} resolved successfully`, 'success');
-      await loadIncidents();
-      if (window.Dashboard && typeof window.Dashboard.loadMetrics === 'function') {
-        window.Dashboard.loadMetrics();
-      }
-    } catch (err) {
-      window.UI.showToast(`Resolution failed: ${err.message}`, 'error');
+  function handleResolve(id) {
+    // Preferred SOC workflow: Direct user into the Investigation Workspace to follow lifecycle and document summary
+    window.UI.showToast(`Opening Incident #${id} in Investigation Workspace to follow lifecycle and document resolution...`, 'info');
+    if (window.Investigation && typeof window.Investigation.openCase === 'function') {
+      window.Investigation.openCase(id);
     }
   }
 

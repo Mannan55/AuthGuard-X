@@ -143,7 +143,7 @@ AuthGuard-X implements an enterprise SOC incident response lifecycle:
 - **Traffic Protection**: `Flask-Limiter` (IP-based endpoint rate throttling)
 - **Frontend Architecture**: Modular Vanilla JavaScript (ES6+), design tokens (`tokens.css`), responsive layout (`layout.css`), accessible components (`components.css`), Chart.js
 - **Database Engine**: SQLite3 with strict foreign keys (`PRAGMA foreign_keys = ON`), indexed lookups, and idempotent migrations
-- **Automated QA**: Pytest suite (94 tests) and headless Chrome CDP browser automation (15 real assertions)
+- **Automated QA**: Pytest suite (97 tests) and headless Chrome CDP browser automation (15 real assertions)
 
 ---
 
@@ -213,17 +213,17 @@ Default development accounts:
 The project includes two comprehensive layers of automated verification:
 
 ```powershell
-# 1. Run the complete Pytest suite (94 tests)
+# 1. Run the complete Pytest suite (97 tests)
 pytest tests -v
 
 # 2. Run real-browser visual and functional verification (15 assertions + screenshots)
 python scripts/capture_evidence.py
 ```
 
-### Test Suite Distribution (94 Tests Total)
+### Test Suite Distribution (97 Tests Total)
 - **Phase 1 Baseline** (`tests/test_auth_guard.py` — 15 tests): Health check, login validation, session state, unauthenticated access blocking, and persistence across restarts.
 - **Sprint 1 Professional UI & Hardening** (`tests/test_sprint1.py` — 54 tests): CSRF validation, simulation provenance enforcement, server-derived metrics, pagination envelopes, search/filter/sort allowlists, detail endpoints, and XSS resistance.
-- **Sprint 2 Advanced SOC Investigation & Security Corrections** (`tests/test_sprint2.py` — 25 tests): Idempotent database migrations, automatic case creation, 4-stage lifecycle state machine, reopening workflow with incrementing `reopen_count`, mandatory resolution summary, strict case ownership enforcement (Analyst A cannot resolve Analyst B's cases), auto-claim policy on unassigned cases, optimistic concurrency locking (`version` 409 Conflict), URI scheme safety validation for evidence, administrative log purge protection with mandatory reason and persistent `system_audit_log`, personal queue isolation, and CSRF enforcement on case APIs.
+- **Sprint 2 Advanced SOC Investigation & Security Corrections** (`tests/test_sprint2.py` — 28 tests): Idempotent database migrations, automatic case creation, 4-stage lifecycle state machine, reopening workflow with incrementing `reopen_count`, mandatory resolution summary, strict case ownership enforcement (Analyst A cannot resolve Analyst B's cases), auto-claim policy on unassigned cases, strengthened optimistic concurrency locking (`version` validation, 428 Precondition Required for missing, 400 for malformed, 409 for conflict), multi-client simultaneous race safety, URI scheme safety validation for evidence, administrative log purge protection with mandatory reason and persistent `system_audit_log`, personal queue isolation, and CSRF enforcement on case APIs.
 
 ---
 

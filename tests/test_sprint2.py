@@ -169,7 +169,7 @@ def test_valid_lifecycle_state_machine(authed_admin):
     inc_id = inc["id"]
 
     # 1. new -> investigating
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
     assert res.status_code == 200
     case_data = res.get_json()["case"]
     assert case_data["status"] == "investigating"
@@ -180,7 +180,7 @@ def test_valid_lifecycle_state_machine(authed_admin):
     assert inc_res.get_json()["resolved"] == 0
 
     # 2. investigating -> contained
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "contained"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "contained", "version": 2})
     assert res.status_code == 200
     case_data = res.get_json()["case"]
     assert case_data["status"] == "contained"
@@ -193,7 +193,8 @@ def test_valid_lifecycle_state_machine(authed_admin):
     # 3. contained -> resolved (with resolution summary)
     res = client.patch(f"/api/incidents/{inc_id}/case", json={
         "status": "resolved",
-        "resolution_summary": "Malicious payload quarantined, endpoint disconnected and reimaged."
+        "resolution_summary": "Malicious payload quarantined, endpoint disconnected and reimaged.",
+        "version": 3
     })
     assert res.status_code == 200
     case_data = res.get_json()["case"]
@@ -215,32 +216,34 @@ def test_invalid_lifecycle_transitions_rejected(authed_admin):
     # 1. Cannot skip directly from new to resolved
     res = client.patch(f"/api/incidents/{inc_id}/case", json={
         "status": "resolved",
-        "resolution_summary": "Skipping investigation without triage"
+        "resolution_summary": "Skipping investigation without triage",
+        "version": 1
     })
     assert res.status_code == 400
     assert "Invalid status transition" in res.get_json()["message"]
 
     # 2. Cannot skip directly from new to contained
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "contained"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "contained", "version": 1})
     assert res.status_code == 400
 
     # Transition to investigating
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
 
     # 3. Cannot transition from investigating back to new
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "new"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "new", "version": 2})
     assert res.status_code == 400
 
     # Resolve the case
     client.patch(f"/api/incidents/{inc_id}/case", json={
         "status": "resolved",
-        "resolution_summary": "Triage complete, verified resolved"
+        "resolution_summary": "Triage complete, verified resolved",
+        "version": 2
     })
 
     # 4. Cannot transition from resolved to new or contained
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "new"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "new", "version": 3})
     assert res.status_code == 400
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "contained"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "contained", "version": 3})
     assert res.status_code == 400
 
 
@@ -251,21 +254,23 @@ def test_reopen_workflow(authed_admin):
     inc_id = inc["id"]
 
     # Move to investigating then resolved
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
     client.patch(f"/api/incidents/{inc_id}/case", json={
         "status": "resolved",
-        "resolution_summary": "Initial remediation applied"
+        "resolution_summary": "Initial remediation applied",
+        "version": 2
     })
 
     # Attempt reopen without reason
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 3})
     assert res.status_code == 400
     assert "reopen reason" in res.get_json()["message"].lower()
 
     # Reopen with valid reason
     res = client.patch(f"/api/incidents/{inc_id}/case", json={
         "status": "investigating",
-        "reopen_reason": "Secondary C2 beacon detected on adjacent subnet, reopening investigation."
+        "reopen_reason": "Secondary C2 beacon detected on adjacent subnet, reopening investigation.",
+        "version": 3
     })
     assert res.status_code == 200
     case_data = res.get_json()["case"]
@@ -288,20 +293,21 @@ def test_resolution_requires_meaningful_summary(authed_admin):
     inc = _create_incident(client, attack="Phishing Link Click", risk=55)
     inc_id = inc["id"]
 
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
 
     # Empty summary
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": ""})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "", "version": 2})
     assert res.status_code == 400
 
     # Too short summary (< 5 chars)
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "done"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "done", "version": 2})
     assert res.status_code == 400
 
     # Valid summary
     res = client.patch(f"/api/incidents/{inc_id}/case", json={
         "status": "resolved",
-        "resolution_summary": "User password reset, mailbox rules audited, no mail exfiltrated."
+        "resolution_summary": "User password reset, mailbox rules audited, no mail exfiltrated.",
+        "version": 2
     })
     assert res.status_code == 200
 
@@ -313,17 +319,17 @@ def test_case_assignment_admin(authed_admin):
     inc_id = inc["id"]
 
     # Assign to analyst_john
-    res = client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_john"})
+    res = client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_john", "version": 1})
     assert res.status_code == 200
     assert res.get_json()["assigned_username"] == "analyst_john"
 
     # Reassign to analyst_jane
-    res = client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_jane"})
+    res = client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_jane", "version": 2})
     assert res.status_code == 200
     assert res.get_json()["assigned_username"] == "analyst_jane"
 
     # Unassign
-    res = client.post(f"/api/incidents/{inc_id}/assign", json={"unassign": True})
+    res = client.post(f"/api/incidents/{inc_id}/assign", json={"unassign": True, "version": 3})
     assert res.status_code == 200
     assert res.get_json()["assigned_to"] is None
 
@@ -343,7 +349,7 @@ def test_case_assignment_analyst_claim(test_env):
     john_id = client.get("/api/auth/session").get_json()["user"]["id"]
 
     # Analyst claiming for himself succeeds
-    res = client.post(f"/api/incidents/{inc_id}/assign", json={"assigned_to": john_id})
+    res = client.post(f"/api/incidents/{inc_id}/assign", json={"assigned_to": john_id, "version": 1})
     assert res.status_code == 200
     assert res.get_json()["assigned_username"] == "analyst_john"
 
@@ -352,7 +358,7 @@ def test_case_assignment_analyst_claim(test_env):
     client.post("/api/auth/login", json={"username": "analyst_jane", "password": "AnalystJane2026!"})
     jane_id = client.get("/api/auth/session").get_json()["user"]["id"]
 
-    res = client.post(f"/api/incidents/{inc_id}/assign", json={"assigned_to": jane_id})
+    res = client.post(f"/api/incidents/{inc_id}/assign", json={"assigned_to": jane_id, "version": 2})
     assert res.status_code == 403
 
 
@@ -364,12 +370,12 @@ def test_analyst_rbac_status_transition(test_env):
     client.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
     inc = _create_incident(client, attack="Pass the Hash", risk=88)
     inc_id = inc["id"]
-    client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_john"})
+    client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_john", "version": 1})
     client.post("/api/auth/logout")
 
     # Log in as analyst_jane and attempt status modification
     client.post("/api/auth/login", json={"username": "analyst_jane", "password": "AnalystJane2026!"})
-    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 2})
     assert res.status_code == 403
     assert "assigned to another analyst" in res.get_json()["message"]
 
@@ -382,7 +388,8 @@ def test_case_notes_creation_and_persistence(authed_analyst):
 
     # Post note
     res = client.post(f"/api/incidents/{inc_id}/notes", json={
-        "content": "Observed unusual SPN requests for domain service accounts."
+        "content": "Observed unusual SPN requests for domain service accounts.",
+        "version": 1
     })
     assert res.status_code == 201
     note = res.get_json()["note"]
@@ -397,7 +404,7 @@ def test_case_notes_creation_and_persistence(authed_analyst):
     assert notes[0]["author_username"] == "analyst_john"
 
     # Empty note rejected
-    res = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "   "})
+    res = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "   ", "version": 2})
     assert res.status_code == 400
 
 
@@ -408,7 +415,7 @@ def test_case_notes_xss_safety(authed_admin):
     inc_id = inc["id"]
 
     xss_payload = "<script>alert('pwned')</script><b>bold observation</b>"
-    res = client.post(f"/api/incidents/{inc_id}/notes", json={"content": xss_payload})
+    res = client.post(f"/api/incidents/{inc_id}/notes", json={"content": xss_payload, "version": 1})
     assert res.status_code == 201
 
     res = client.get(f"/api/incidents/{inc_id}/notes")
@@ -426,7 +433,8 @@ def test_case_evidence_metadata_validation(authed_admin):
     res = client.post(f"/api/incidents/{inc_id}/evidence", json={
         "title": "",
         "evidence_type": "log_excerpt",
-        "source_ref": "https://siem.internal/logs/1"
+        "source_ref": "https://siem.internal/logs/1",
+        "version": 1
     })
     assert res.status_code == 400
 
@@ -434,7 +442,8 @@ def test_case_evidence_metadata_validation(authed_admin):
     res = client.post(f"/api/incidents/{inc_id}/evidence", json={
         "title": "Malicious payload ref",
         "evidence_type": "external_report",
-        "source_ref": "javascript:alert(1)"
+        "source_ref": "javascript:alert(1)",
+        "version": 1
     })
     assert res.status_code == 400
     assert "unsafe" in res.get_json()["message"].lower()
@@ -444,7 +453,8 @@ def test_case_evidence_metadata_validation(authed_admin):
         "title": "Staged Archive File Hash",
         "evidence_type": "hash_indicator",
         "source_ref": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "description": "SHA-256 hash of suspicious archive identified in C:\\Temp."
+        "description": "SHA-256 hash of suspicious archive identified in C:\\Temp.",
+        "version": 1
     })
     assert res.status_code == 201
     ev = res.get_json()["evidence"]
@@ -463,7 +473,7 @@ def test_clear_logs_protection_policy(authed_admin):
     inc_id = inc["id"]
 
     # Add evidence to make it an active investigation
-    client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Important triage notes."})
+    client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Important triage notes.", "version": 1})
 
     # Standard clear attempt should fail with 400 and explanation
     res = client.post("/api/incidents/clear", json={})
@@ -504,8 +514,8 @@ def test_my_queue_filtering(test_env):
     client.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
     inc1 = _create_incident(client, attack="Attack for John", risk=70)
     inc2 = _create_incident(client, attack="Attack for Jane", risk=60)
-    client.post(f"/api/incidents/{inc1['id']}/assign", json={"username": "analyst_john"})
-    client.post(f"/api/incidents/{inc2['id']}/assign", json={"username": "analyst_jane"})
+    client.post(f"/api/incidents/{inc1['id']}/assign", json={"username": "analyst_john", "version": 1})
+    client.post(f"/api/incidents/{inc2['id']}/assign", json={"username": "analyst_jane", "version": 1})
     client.post("/api/auth/logout")
 
     # Log in as analyst_john
@@ -522,7 +532,7 @@ def test_unassigned_cases_endpoint(authed_admin):
     client, _, _ = authed_admin
     inc1 = _create_incident(client, attack="Unassigned 1", risk=60)
     inc2 = _create_incident(client, attack="Assigned 2", risk=70)
-    client.post(f"/api/incidents/{inc2['id']}/assign", json={"username": "analyst_john"})
+    client.post(f"/api/incidents/{inc2['id']}/assign", json={"username": "analyst_john", "version": 1})
 
     res = client.get("/api/cases/unassigned")
     assert res.status_code == 200
@@ -540,12 +550,13 @@ def test_investigation_metrics_calculation(authed_admin):
     inc_inv = _create_incident(client, attack="Inv Vector", risk=60)
     inc_res = _create_incident(client, attack="Res Vector", risk=85)
 
-    client.patch(f"/api/incidents/{inc_inv['id']}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_inv['id']}/case", json={"status": "investigating", "version": 1})
 
-    client.patch(f"/api/incidents/{inc_res['id']}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_res['id']}/case", json={"status": "investigating", "version": 1})
     client.patch(f"/api/incidents/{inc_res['id']}/case", json={
         "status": "resolved",
-        "resolution_summary": "Resolved successfully"
+        "resolution_summary": "Resolved successfully",
+        "version": 2
     })
 
     res = client.get("/api/metrics/investigations")
@@ -569,7 +580,7 @@ def test_legacy_resolve_syncs_case(authed_admin):
     assert res_invalid.status_code == 400
 
     # Transition to 'investigating'
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
 
     # Legacy resolve with valid documentation succeeds
     res = client.post(f"/api/incidents/{inc_id}/resolve", json={"summary": "Remediated legacy route test incident"})
@@ -624,13 +635,14 @@ def test_csrf_enforcement_on_case_endpoints(tmp_path):
         inc_id = sim_res.get_json()["incident"]["id"]
 
         # 3. Missing CSRF on PATCH /case should be rejected (400)
-        res_no_csrf = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+        res_no_csrf = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
         assert res_no_csrf.status_code == 400
 
         # 4. Valid CSRF on PATCH /case accepted (200)
         token = client.get("/api/auth/csrf-token").get_json()["csrf_token"]
         res_with_csrf = client.patch(f"/api/incidents/{inc_id}/case", json={
-            "status": "investigating"
+            "status": "investigating",
+            "version": 1
         }, headers={"X-CSRFToken": token})
         assert res_with_csrf.status_code == 200
 
@@ -684,13 +696,13 @@ def test_ownership_enforcement_analyst_a_cannot_resolve_or_mutate_analyst_b(test
     conn.close()
 
     # Assign to john
-    assign_res = client.post(f"/api/incidents/{inc_id}/assign", json={"assigned_to": john_id})
+    assign_res = client.post(f"/api/incidents/{inc_id}/assign", json={"assigned_to": john_id, "version": 1})
     assert assign_res.status_code == 200
 
     # John logs in and begins investigation
     client.post("/api/auth/logout")
     client.post("/api/auth/login", json={"username": "analyst_john", "password": "AnalystJohn2026!"})
-    start_res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    start_res = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 2})
     assert start_res.status_code == 200
 
     # 2. Analyst Jane logs in and attempts unauthorized mutations on John's case
@@ -703,27 +715,28 @@ def test_ownership_enforcement_analyst_a_cannot_resolve_or_mutate_analyst_b(test
     assert "assigned to @analyst_john" in res_resolve.get_json()["message"]
 
     # Jane attempts modern resolve via PATCH -> 403 Forbidden
-    res_patch_resolve = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "Jane resolve attempt"})
+    res_patch_resolve = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "Jane resolve attempt", "version": 3})
     assert res_patch_resolve.status_code == 403
 
     # Jane attempts status transition to contained -> 403 Forbidden
-    res_contain = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "contained"})
+    res_contain = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "contained", "version": 3})
     assert res_contain.status_code == 403
 
     # Jane attempts adding note -> 403 Forbidden
-    res_note = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Jane snooping note"})
+    res_note = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Jane snooping note", "version": 3})
     assert res_note.status_code == 403
 
     # Jane attempts adding evidence -> 403 Forbidden
     res_evidence = client.post(f"/api/incidents/{inc_id}/evidence", json={
         "title": "Jane's rogue evidence",
         "evidence_type": "log_excerpt",
-        "source_ref": "log_ex.txt"
+        "source_ref": "log_ex.txt",
+        "version": 3
     })
     assert res_evidence.status_code == 403
 
     # Jane attempts reassignment -> 403 Forbidden
-    res_reassign = client.post(f"/api/incidents/{inc_id}/assign", json={"unassign": True})
+    res_reassign = client.post(f"/api/incidents/{inc_id}/assign", json={"unassign": True, "version": 3})
     assert res_reassign.status_code == 403
 
     # Verify case state is intact
@@ -736,7 +749,7 @@ def test_ownership_enforcement_analyst_a_cannot_resolve_or_mutate_analyst_b(test
     client.post("/api/auth/logout")
     client.post("/api/auth/login", json={"username": "analyst_john", "password": "AnalystJohn2026!"})
 
-    res_john_note = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Authorized analysis by John."})
+    res_john_note = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Authorized analysis by John.", "version": 3})
     assert res_john_note.status_code == 201
 
     res_john_resolve = client.post(f"/api/incidents/{inc_id}/resolve", json={"summary": "Threat mitigated and firewall updated."})
@@ -757,7 +770,7 @@ def test_unassigned_case_claim_policy(test_env):
     client.post("/api/auth/logout")
     client.post("/api/auth/login", json={"username": "analyst_jane", "password": "AnalystJane2026!"})
 
-    res_start = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    res_start = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
     assert res_start.status_code == 200
     assert res_start.get_json()["case"]["assigned_username"] == "analyst_jane"
 
@@ -765,7 +778,7 @@ def test_unassigned_case_claim_policy(test_env):
     client.post("/api/auth/logout")
     client.post("/api/auth/login", json={"username": "analyst_john", "password": "AnalystJohn2026!"})
 
-    res_note = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "John trying to modify Jane's case"})
+    res_note = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "John trying to modify Jane's case", "version": 2})
     assert res_note.status_code == 403
 
 
@@ -811,8 +824,8 @@ def test_reopen_count_increments_accurately(test_env):
     assert c["reopen_count"] == 0
 
     # Start and resolve
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "First initial resolution"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "First initial resolution", "version": 2})
     c = client.get(f"/api/incidents/{inc_id}/case").get_json()["case"]
     assert c["status"] == "resolved"
     assert c["reopen_count"] == 0
@@ -820,18 +833,20 @@ def test_reopen_count_increments_accurately(test_env):
     # Reopen #1
     reopen1 = client.patch(f"/api/incidents/{inc_id}/case", json={
         "status": "investigating",
-        "reopen_reason": "Attacker reinfected host from secondary persistence"
+        "reopen_reason": "Attacker reinfected host from secondary persistence",
+        "version": 3
     })
     assert reopen1.status_code == 200
     assert reopen1.get_json()["case"]["reopen_count"] == 1
 
     # Resolve again
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "Re-isolated and wiped host"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "resolved", "resolution_summary": "Re-isolated and wiped host", "version": 4})
 
     # Reopen #2
     reopen2 = client.patch(f"/api/incidents/{inc_id}/case", json={
         "status": "investigating",
-        "reopen_reason": "Audit review requested further forensic extraction"
+        "reopen_reason": "Audit review requested further forensic extraction",
+        "version": 5
     })
     assert reopen2.status_code == 200
     assert reopen2.get_json()["case"]["reopen_count"] == 2
@@ -845,22 +860,27 @@ def test_evidence_url_validation_distinguishes_urls_from_identifiers(test_env):
     inc_id = inc["id"]
 
     # Valid non-URL identifiers
+    current_ver = 1
     for valid_id in ["sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a", "capture_20261030.pcap", "SEC-INCIDENT-9912"]:
         res = client.post(f"/api/incidents/{inc_id}/evidence", json={
             "title": f"Ref {valid_id[:10]}",
             "evidence_type": "hash_indicator",
-            "source_ref": valid_id
+            "source_ref": valid_id,
+            "version": current_ver
         })
         assert res.status_code == 201
+        current_ver += 1
 
     # Valid HTTP and HTTPS URLs
     for valid_url in ["https://www.virustotal.com/gui/file/123", "http://internal-soc.local/reports/threat1"]:
         res = client.post(f"/api/incidents/{inc_id}/evidence", json={
             "title": "Threat Report",
             "evidence_type": "external_report",
-            "source_ref": valid_url
+            "source_ref": valid_url,
+            "version": current_ver
         })
         assert res.status_code == 201
+        current_ver += 1
 
     # Unsafe / Disallowed URI schemes must be rejected with 400
     unsafe_schemes = [
@@ -875,7 +895,8 @@ def test_evidence_url_validation_distinguishes_urls_from_identifiers(test_env):
         res = client.post(f"/api/incidents/{inc_id}/evidence", json={
             "title": "Unsafe Ref Test",
             "evidence_type": "other",
-            "source_ref": unsafe
+            "source_ref": unsafe,
+            "version": current_ver
         })
         assert res.status_code == 400
         assert res.get_json()["error"] == "Bad Request"
@@ -911,5 +932,197 @@ def test_historical_migration_preserves_unknown_resolution_times(test_env):
     assert metrics_res.status_code == 200
     metrics = metrics_res.get_json()
     assert metrics["resolved"] >= 1
+
+
+def test_optimistic_locking_missing_or_malformed_version_rejected(test_env):
+    """Modern case mutation endpoints require a valid version (428 for missing, 400 for malformed)."""
+    client, _, _ = test_env
+    client.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+    inc = _create_incident(client, attack="Locking Validation Test", risk=70)
+    inc_id = inc["id"]
+
+    # 1. Missing version on PATCH /case -> 428 Precondition Required
+    res1 = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    assert res1.status_code == 428
+    assert res1.get_json()["error"] == "Precondition Required"
+
+    # 2. Missing version on POST /notes -> 428 Precondition Required
+    res2 = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Triage notes without version"})
+    assert res2.status_code == 428
+
+    # 3. Missing version on POST /evidence -> 428 Precondition Required
+    res3 = client.post(f"/api/incidents/{inc_id}/evidence", json={
+        "title": "Evidence without version",
+        "evidence_type": "log_excerpt",
+        "source_ref": "log.txt"
+    })
+    assert res3.status_code == 428
+
+    # 4. Missing version on POST /assign -> 428 Precondition Required
+    res4 = client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_john"})
+    assert res4.status_code == 428
+
+    # 5. Malformed version (non-numeric, negative, or zero) -> 400 Bad Request
+    for bad_ver in ["not_a_number", -3, 0]:
+        res_bad = client.patch(f"/api/incidents/{inc_id}/case", json={
+            "status": "investigating",
+            "version": bad_ver
+        })
+        assert res_bad.status_code == 400
+        assert res_bad.get_json()["error"] == "Bad Request"
+
+    # 6. Legacy /resolve endpoint does NOT require version (backward compatibility)
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
+    res_legacy = client.post(f"/api/incidents/{inc_id}/resolve", json={
+        "summary": "Remediated via legacy endpoint without version header"
+    })
+    assert res_legacy.status_code == 200
+    assert res_legacy.get_json()["case"]["status"] == "resolved"
+
+
+def test_two_client_concurrent_updates_independent_connections(test_env):
+    """Two independent clients attempting simultaneous updates do not create duplicate ownership or inconsistent audit trails."""
+    client1, config, db_path = test_env
+
+    # Create app client 2 sharing same database
+    app2 = create_app(test_config=config)
+    client2 = app2.test_client()
+
+    # Admin creates unassigned incident
+    client1.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+    inc = _create_incident(client1, attack="Simultaneous Race Target", risk=89)
+    inc_id = inc["id"]
+
+    # Analyst John logs into Client 1
+    client1.post("/api/auth/logout")
+    client1.post("/api/auth/login", json={"username": "analyst_john", "password": "AnalystJohn2026!"})
+    john_id = client1.get("/api/auth/session").get_json()["user"]["id"]
+
+    # Analyst Jane logs into Client 2
+    client2.post("/api/auth/login", json={"username": "analyst_jane", "password": "AnalystJane2026!"})
+    jane_id = client2.get("/api/auth/session").get_json()["user"]["id"]
+
+    # Both clients inspect case and observe version = 1
+    c1_read = client1.get(f"/api/incidents/{inc_id}/case").get_json()["case"]
+    c2_read = client2.get(f"/api/incidents/{inc_id}/case").get_json()["case"]
+    assert c1_read["version"] == 1
+    assert c2_read["version"] == 1
+    assert c1_read["assigned_to"] is None
+
+    # John claims the incident first with version = 1
+    res_john = client1.post(f"/api/incidents/{inc_id}/assign", json={
+        "assigned_to": john_id,
+        "version": 1
+    })
+    assert res_john.status_code == 200
+    assert res_john.get_json()["assigned_username"] == "analyst_john"
+
+    # Jane attempts simultaneous claim with stale version = 1
+    res_jane = client2.post(f"/api/incidents/{inc_id}/assign", json={
+        "assigned_to": jane_id,
+        "version": 1  # Stale!
+    })
+    assert res_jane.status_code == 409
+    assert res_jane.get_json()["error"] == "Conflict"
+    assert res_jane.get_json()["current_version"] == 2
+
+    # Even if Jane re-reads version = 2 and tries to claim, RBAC forbids it because John now owns it
+    res_jane_retry = client2.post(f"/api/incidents/{inc_id}/assign", json={
+        "assigned_to": jane_id,
+        "version": 2
+    })
+    assert res_jane_retry.status_code == 403
+
+    # Verify database integrity: exactly one owner, consistent audit log
+    conn = get_db_connection(db_path)
+    case_row = conn.execute("SELECT * FROM cases WHERE incident_id = ?", (inc_id,)).fetchone()
+    assert case_row["assigned_username"] == "analyst_john"
+    assert case_row["version"] == 2
+
+    assign_audits = conn.execute("""
+        SELECT * FROM incident_audit_log 
+        WHERE incident_id = ? AND action = 'assignment_change'
+    """, (inc_id,)).fetchall()
+    assert len(assign_audits) == 1
+    assert assign_audits[0]["actor_username"] == "analyst_john"
+    conn.close()
+
+
+def test_incident_feed_resolve_action_workflow(test_env):
+    """End-to-end journey from Incident Feed to Investigation Workspace to Resolution."""
+    client, _, _ = test_env
+    client.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+
+    # 1. Simulate incident (appears in Incident Feed)
+    sim = client.post("/api/incidents/simulate", json={
+        "attack": "Privileged Token Impersonation",
+        "risk": 91
+    })
+    assert sim.status_code == 201
+    inc_id = sim.get_json()["incident"]["id"]
+
+    # 2. Raw uninvestigated resolution without summary is rejected
+    raw_res = client.post(f"/api/incidents/{inc_id}/resolve")
+    assert raw_res.status_code == 400
+
+    # 3. User navigates to Investigation Workspace (reads case)
+    case_res = client.get(f"/api/incidents/{inc_id}/case")
+    assert case_res.status_code == 200
+    case_ver = case_res.get_json()["case"]["version"]
+    assert case_ver == 1
+
+    # 4. Analyst starts investigation
+    start_res = client.patch(f"/api/incidents/{inc_id}/case", json={
+        "status": "investigating",
+        "version": case_ver
+    })
+    assert start_res.status_code == 200
+    case_ver = start_res.get_json()["case"]["version"]
+    assert case_ver == 2
+
+    # 5. Analyst adds triage findings note
+    note_res = client.post(f"/api/incidents/{inc_id}/notes", json={
+        "content": "Compromised admin token identified via Kerberos ticket anomalies.",
+        "version": case_ver
+    })
+    assert note_res.status_code == 201
+    case_ver = client.get(f"/api/incidents/{inc_id}/case").get_json()["case"]["version"]
+    assert case_ver == 3
+
+    # 6. Analyst attaches forensic evidence
+    ev_res = client.post(f"/api/incidents/{inc_id}/evidence", json={
+        "title": "Staged Kerberos TGT Dump",
+        "evidence_type": "hash_indicator",
+        "source_ref": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+        "description": "Hash of extracted token cache from memory",
+        "version": case_ver
+    })
+    assert ev_res.status_code == 201
+    case_ver = client.get(f"/api/incidents/{inc_id}/case").get_json()["case"]["version"]
+    assert case_ver == 4
+
+    # 7. Analyst marks contained
+    cont_res = client.patch(f"/api/incidents/{inc_id}/case", json={
+        "status": "contained",
+        "version": case_ver
+    })
+    assert cont_res.status_code == 200
+    case_ver = cont_res.get_json()["case"]["version"]
+    assert case_ver == 5
+
+    # 8. Analyst documents meaningful resolution summary in modal
+    res_res = client.patch(f"/api/incidents/{inc_id}/case", json={
+        "status": "resolved",
+        "resolution_summary": "Domain controller ticket granting service restarted, krbtgt password rotated twice, token revoked.",
+        "version": case_ver
+    })
+    assert res_res.status_code == 200
+    assert res_res.get_json()["case"]["status"] == "resolved"
+
+    # 9. Verify Incident Feed reflects resolved status
+    feed_res = client.get(f"/api/incidents/{inc_id}")
+    assert feed_res.status_code == 200
+    assert feed_res.get_json()["resolved"] == 1
+
 
 

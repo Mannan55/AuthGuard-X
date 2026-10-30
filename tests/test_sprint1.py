@@ -152,7 +152,7 @@ def test_incident_resolution(authed_env):
     client, _, _ = authed_env
     sim = _post_incident(client, attack="SQL Injection", risk=90)
     inc_id = sim.get_json()["incident"]["id"]
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
     res = client.post(f"/api/incidents/{inc_id}/resolve", json={"summary": "Remediated SQL injection threat"})
     assert res.status_code == 200
     logs = client.get("/api/incidents").get_json()
@@ -178,7 +178,7 @@ def test_legacy_endpoint_aliases(test_env):
     assert get_res.status_code == 200
     logs = get_res.get_json()
     assert any(i["attack"] == "Port Scan" for i in logs)
-    client.patch(f"/api/incidents/{log_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{log_id}/case", json={"status": "investigating", "version": 1})
     assert client.post(f"/resolve_incident/{log_id}", json={"summary": "Remediated port scan activity"}).status_code == 200
     assert client.post("/logout").status_code == 200
 
@@ -459,7 +459,7 @@ def test_metrics_updates_on_resolution(authed_env):
     assert before["open_incidents"] == 1
     assert before["health_score"] < 100
 
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
     client.post(f"/api/incidents/{inc_id}/resolve", json={"summary": "Remediated critical threat vector"})
     after = client.get("/api/metrics").get_json()
     assert after["open_incidents"] == 0
@@ -578,7 +578,7 @@ def test_incidents_filter_status_open(authed_env):
     r1 = _post_incident(client, attack="Open A", risk=50)
     r2 = _post_incident(client, attack="Will Resolve", risk=50)
     inc_id = r2.get_json()["incident"]["id"]
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
     client.post(f"/api/incidents/{inc_id}/resolve", json={"summary": "Remediated critical threat vector"})
 
     res = client.get("/api/incidents?status=open")
@@ -593,7 +593,7 @@ def test_incidents_filter_status_resolved(authed_env):
     r = _post_incident(client, attack="Resolve Me", risk=60)
     inc_id = r.get_json()["incident"]["id"]
     _post_incident(client, attack="Stay Open", risk=40)
-    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating"})
+    client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
     client.post(f"/api/incidents/{inc_id}/resolve", json={"summary": "Remediated critical threat vector"})
 
     res = client.get("/api/incidents?status=resolved")

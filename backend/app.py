@@ -958,7 +958,7 @@ def create_app(test_config=None) -> Flask:
                 case_row = c.fetchone()
         return case_row
 
-    def _perform_incident_resolution(conn, c, incident_id: int, user_id: int, user_role: str, user_name: str, summary: str, expected_version: int = None):
+    def _perform_incident_resolution(conn, c, incident_id: int, user_id: int, user_role: str, user_name: str, summary: str, expected_version: int = None, require_version: bool = False):
         """
         Unified incident resolution backend service.
         Enforces:
@@ -1015,9 +1015,33 @@ def create_app(test_config=None) -> Flask:
         summary = summary.strip()[:2000]
 
         # 4. Concurrency safety (Optimistic locking)
-        if expected_version is not None:
+        if require_version:
+            if expected_version is None:
+                return jsonify({
+                    "error": "Precondition Required",
+                    "message": "Missing 'version' parameter. Modern case resolution requires an expected case version for optimistic concurrency control."
+                }), 428
             try:
                 expected_version = int(expected_version)
+                if expected_version <= 0:
+                    raise ValueError()
+            except (ValueError, TypeError):
+                return jsonify({
+                    "error": "Bad Request",
+                    "message": "Malformed 'version' parameter. Version must be a positive integer."
+                }), 400
+
+            if expected_version != current_version:
+                return jsonify({
+                    "error": "Conflict",
+                    "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}. Please reload latest state and retry.",
+                    "current_version": current_version
+                }), 409
+        elif expected_version is not None:
+            try:
+                expected_version = int(expected_version)
+                if expected_version <= 0:
+                    raise ValueError()
                 if expected_version != current_version:
                     return jsonify({
                         "error": "Conflict",
@@ -1025,7 +1049,10 @@ def create_app(test_config=None) -> Flask:
                         "current_version": current_version
                     }), 409
             except (ValueError, TypeError):
-                pass
+                return jsonify({
+                    "error": "Bad Request",
+                    "message": "Malformed 'version' parameter. Version must be a positive integer."
+                }), 400
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1084,7 +1111,7 @@ def create_app(test_config=None) -> Flask:
         user_id = session.get("user_id")
         user_name = session.get("username", "analyst")
 
-        resp, code = _perform_incident_resolution(conn, c, id, user_id, user_role, user_name, summary, expected_version)
+        resp, code = _perform_incident_resolution(conn, c, id, user_id, user_role, user_name, summary, expected_version, require_version=False)
         conn.close()
         return resp, code
 
@@ -1297,27 +1324,39 @@ def create_app(test_config=None) -> Flask:
         # Validate required documentation
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Concurrency safety: optimistic locking check for modern case mutations
+        expected_version = data.get("version")
+        if expected_version is None:
+            conn.close()
+            return jsonify({
+                "error": "Precondition Required",
+                "message": "Missing 'version' parameter. Modern case mutations require an expected case version for optimistic concurrency control."
+            }), 428
+        try:
+            expected_version = int(expected_version)
+            if expected_version <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Malformed 'version' parameter. Version must be a positive integer."
+            }), 400
+
+        current_version = case_row["version"]
+        if expected_version != current_version:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}. Please reload latest state and retry.",
+                "current_version": current_version
+            }), 409
+
         # Delegate resolution to unified resolution engine
         if target_status == "resolved":
-            resp, code = _perform_incident_resolution(conn, c, id, user_id, user_role, user_name, resolution_summary, data.get("version"))
+            resp, code = _perform_incident_resolution(conn, c, id, user_id, user_role, user_name, resolution_summary, expected_version, require_version=True)
             conn.close()
             return resp, code
-
-        # Concurrency safety: optimistic locking check
-        expected_version = data.get("version")
-        current_version = case_row["version"]
-        if expected_version is not None:
-            try:
-                expected_version = int(expected_version)
-                if expected_version != current_version:
-                    conn.close()
-                    return jsonify({
-                        "error": "Conflict",
-                        "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}. Please reload latest state and retry.",
-                        "current_version": current_version
-                    }), 409
-            except (ValueError, TypeError):
-                pass
 
         # Execute transition in atomic transaction
         auto_assigned = False
@@ -1474,19 +1513,31 @@ def create_app(test_config=None) -> Flask:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         expected_version = data.get("version")
+        if expected_version is None:
+            conn.close()
+            return jsonify({
+                "error": "Precondition Required",
+                "message": "Missing 'version' parameter. Modern case assignment requires an expected case version for optimistic concurrency control."
+            }), 428
+        try:
+            expected_version = int(expected_version)
+            if expected_version <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Malformed 'version' parameter. Version must be a positive integer."
+            }), 400
+
         current_version = case_row["version"]
-        if expected_version is not None:
-            try:
-                expected_version = int(expected_version)
-                if expected_version != current_version:
-                    conn.close()
-                    return jsonify({
-                        "error": "Conflict",
-                        "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}.",
-                        "current_version": current_version
-                    }), 409
-            except (ValueError, TypeError):
-                pass
+        if expected_version != current_version:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}.",
+                "current_version": current_version
+            }), 409
 
         if unassign or target_uid is None and not target_user_str:
             # Unassign logic
@@ -1635,7 +1686,36 @@ def create_app(test_config=None) -> Flask:
         author_name = session.get("username", "analyst")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Concurrency safety: optimistic locking check for modern case mutations
+        expected_version = data.get("version")
+        if expected_version is None:
+            conn.close()
+            return jsonify({
+                "error": "Precondition Required",
+                "message": "Missing 'version' parameter. Adding case notes requires an expected case version for optimistic concurrency control."
+            }), 428
+        try:
+            expected_version = int(expected_version)
+            if expected_version <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Malformed 'version' parameter. Version must be a positive integer."
+            }), 400
+
+        current_version = case_row["version"]
+        if expected_version != current_version:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}.",
+                "current_version": current_version
+            }), 409
+
         # Ownership enforcement: only assigned analyst or admin can modify owned case
+        auto_claimed = False
         if caller_role != "admin":
             if current_assignee_id is not None and current_assignee_id != author_id:
                 conn.close()
@@ -1644,26 +1724,42 @@ def create_app(test_config=None) -> Flask:
                     "message": f"Incident is assigned to @{current_assignee_name}. Only the assigned analyst or an administrator can add investigation notes."
                 }), 403
             if current_assignee_id is None:
+                auto_claimed = True
                 # Auto-claim unassigned case when adding a note
                 c.execute("""
                     UPDATE cases
                     SET assigned_to = ?, assigned_username = ?, assigned_at = ?, updated_at = ?, version = version + 1
-                    WHERE incident_id = ?
-                """, (author_id, author_name, now, now, id))
+                    WHERE incident_id = ? AND version = ?
+                """, (author_id, author_name, now, now, id, current_version))
+                if c.rowcount == 0:
+                    conn.close()
+                    return jsonify({
+                        "error": "Conflict",
+                        "message": "Concurrent modification conflict detected.",
+                        "current_version": current_version
+                    }), 409
                 c.execute("""
                     INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
                     VALUES (?, ?, ?, 'assignment_change', 'unassigned', ?, 'Auto-claimed upon note creation', ?)
                 """, (id, author_id, author_name, author_name, now))
+
+        if not auto_claimed:
+            c.execute("""
+                UPDATE cases SET updated_at = ?, version = version + 1 WHERE incident_id = ? AND version = ?
+            """, (now, id, current_version))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": "Concurrent modification conflict detected.",
+                    "current_version": current_version
+                }), 409
 
         c.execute("""
             INSERT INTO incident_notes (incident_id, author_id, author_username, content, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (id, author_id, author_name, content, now, now))
         note_id = c.lastrowid
-
-        c.execute("""
-            UPDATE cases SET updated_at = ?, version = version + 1 WHERE incident_id = ?
-        """, (now, id))
 
         c.execute("""
             INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
@@ -1775,7 +1871,36 @@ def create_app(test_config=None) -> Flask:
         author_name = session.get("username", "analyst")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Concurrency safety: optimistic locking check for modern case mutations
+        expected_version = data.get("version")
+        if expected_version is None:
+            conn.close()
+            return jsonify({
+                "error": "Precondition Required",
+                "message": "Missing 'version' parameter. Attaching case evidence requires an expected case version for optimistic concurrency control."
+            }), 428
+        try:
+            expected_version = int(expected_version)
+            if expected_version <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Malformed 'version' parameter. Version must be a positive integer."
+            }), 400
+
+        current_version = case_row["version"]
+        if expected_version != current_version:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}.",
+                "current_version": current_version
+            }), 409
+
         # Ownership enforcement: only assigned analyst or admin can attach evidence
+        auto_claimed = False
         if caller_role != "admin":
             if current_assignee_id is not None and current_assignee_id != author_id:
                 conn.close()
@@ -1784,26 +1909,42 @@ def create_app(test_config=None) -> Flask:
                     "message": f"Incident is assigned to @{current_assignee_name}. Only the assigned analyst or an administrator can attach evidence."
                 }), 403
             if current_assignee_id is None:
+                auto_claimed = True
                 # Auto-claim unassigned case when attaching evidence
                 c.execute("""
                     UPDATE cases
                     SET assigned_to = ?, assigned_username = ?, assigned_at = ?, updated_at = ?, version = version + 1
-                    WHERE incident_id = ?
-                """, (author_id, author_name, now, now, id))
+                    WHERE incident_id = ? AND version = ?
+                """, (author_id, author_name, now, now, id, current_version))
+                if c.rowcount == 0:
+                    conn.close()
+                    return jsonify({
+                        "error": "Conflict",
+                        "message": "Concurrent modification conflict detected.",
+                        "current_version": current_version
+                    }), 409
                 c.execute("""
                     INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
                     VALUES (?, ?, ?, 'assignment_change', 'unassigned', ?, 'Auto-claimed upon evidence attachment', ?)
                 """, (id, author_id, author_name, author_name, now))
+
+        if not auto_claimed:
+            c.execute("""
+                UPDATE cases SET updated_at = ?, version = version + 1 WHERE incident_id = ? AND version = ?
+            """, (now, id, current_version))
+            if c.rowcount == 0:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": "Concurrent modification conflict detected.",
+                    "current_version": current_version
+                }), 409
 
         c.execute("""
             INSERT INTO incident_evidence (incident_id, title, evidence_type, source_ref, description, added_by_id, added_by_username, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (id, title, evidence_type, source_ref, description, author_id, author_name, now))
         evidence_id = c.lastrowid
-
-        c.execute("""
-            UPDATE cases SET updated_at = ?, version = version + 1 WHERE incident_id = ?
-        """, (now, id))
 
         c.execute("""
             INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
