@@ -15,6 +15,19 @@
       const data = await window.API.metrics.get();
       renderKPIs(data);
       renderSeverityBreakdown(data);
+
+      // Sprint 2: Also update case pipeline / queue badge
+      try {
+        const invMetrics = await window.API.cases.metrics();
+        const navBadge = document.getElementById('nav-my-queue-count');
+        if (navBadge) {
+          const count = invMetrics.my_queue ?? 0;
+          navBadge.textContent = count;
+          navBadge.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+      } catch (invErr) {
+        // Soft fail if not logged in
+      }
     } catch (err) {
       console.warn('[Dashboard] Failed to load metrics:', err);
     }

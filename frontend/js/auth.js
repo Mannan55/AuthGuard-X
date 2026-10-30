@@ -191,6 +191,7 @@
     checkSession,
     onAuthChange,
     getCurrentUser: () => currentUser,
+    getUser: () => currentUser,
     fillDemoCredentials,
     handleLogout
   };

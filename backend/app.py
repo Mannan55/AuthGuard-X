@@ -38,6 +38,7 @@ def resolve_db_path(db_setting: str) -> str:
 def get_db_connection(db_path: str):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 
@@ -45,7 +46,7 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
             demo_user: str, demo_pass: str):
     """
     Initializes database tables and safely migrates schema if needed.
-    Demo user is explicitly seeded ONLY in development environment when enabled.
+    Demo user and development analysts are explicitly seeded ONLY in development environment when enabled.
     """
     conn = get_db_connection(db_path)
     c = conn.cursor()
@@ -83,19 +84,125 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
     if "is_simulated" not in columns:
         c.execute("ALTER TABLE logs ADD COLUMN is_simulated INTEGER DEFAULT 0")
 
+    # Sprint 2: Cases table (Lifecycle: new -> investigating -> contained -> resolved)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS cases (
+            incident_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'investigating', 'contained', 'resolved')),
+            assigned_to INTEGER,
+            assigned_username TEXT,
+            assigned_at TEXT,
+            investigation_started_at TEXT,
+            contained_at TEXT,
+            resolved_at TEXT,
+            resolution_summary TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE CASCADE,
+            FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
+        )
+    ''')
+
+    # Sprint 2: Investigation notes table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS incident_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            incident_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL,
+            author_username TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE CASCADE,
+            FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    ''')
+
+    # Sprint 2: Evidence reference metadata table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS incident_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            incident_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            evidence_type TEXT NOT NULL,
+            source_ref TEXT NOT NULL,
+            description TEXT NOT NULL,
+            added_by_id INTEGER NOT NULL,
+            added_by_username TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE CASCADE,
+            FOREIGN KEY (added_by_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    ''')
+
+    # Sprint 2: Append-only investigation audit trail table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS incident_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            incident_id INTEGER NOT NULL,
+            actor_id INTEGER NOT NULL,
+            actor_username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            before_value TEXT,
+            after_value TEXT,
+            description TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE CASCADE,
+            FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    ''')
+
+    # Sprint 2: Performance indexes
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cases_assigned_to ON cases(assigned_to)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_notes_incident ON incident_notes(incident_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_evidence_incident ON incident_evidence(incident_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_audit_incident ON incident_audit_log(incident_id)")
+
+    # Idempotent Backfill: Create case records for existing logs that don't have one
+    c.execute('''
+        INSERT INTO cases (incident_id, status, created_at, updated_at, resolved_at, resolution_summary)
+        SELECT 
+            id,
+            CASE WHEN resolved = 1 THEN 'resolved' ELSE 'new' END,
+            time,
+            time,
+            CASE WHEN resolved = 1 THEN time ELSE NULL END,
+            CASE WHEN resolved = 1 THEN 'Resolved in previous system state' ELSE NULL END
+        FROM logs
+        WHERE id NOT IN (SELECT incident_id FROM cases)
+    ''')
+
     # Safe demo user provisioning
     # Strictly prohibited in production!
     if app_env == "development" and demo_mode and seed_demo:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Admin user
         c.execute("SELECT id FROM users WHERE username = ?", (demo_user,))
-        existing_user = c.fetchone()
-        if not existing_user and demo_user and demo_pass:
+        existing_admin = c.fetchone()
+        if not existing_admin and demo_user and demo_pass:
             pw_hash = bcrypt.hashpw(demo_pass.encode("utf-8"), bcrypt.gensalt(rounds=12))
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             c.execute(
                 "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, ?)",
                 (demo_user, pw_hash, "admin", now)
             )
             print(f"[AUTHGUARD-INIT] Development demo user provisioned: '{demo_user}'")
+
+        # Development analyst users for assignment workflow demonstrations
+        demo_analysts = [
+            ("analyst_john", "AnalystJohn2026!", "analyst"),
+            ("analyst_jane", "AnalystJane2026!", "analyst"),
+        ]
+        for a_user, a_pass, a_role in demo_analysts:
+            c.execute("SELECT id FROM users WHERE username = ?", (a_user,))
+            if not c.fetchone():
+                a_hash = bcrypt.hashpw(a_pass.encode("utf-8"), bcrypt.gensalt(rounds=12))
+                c.execute(
+                    "INSERT INTO users (username, password, role, created_at) VALUES (?, ?, ?, ?)",
+                    (a_user, a_hash, a_role, now)
+                )
+                print(f"[AUTHGUARD-INIT] Development analyst provisioned: '{a_user}'")
 
     conn.commit()
     conn.close()
@@ -145,7 +252,15 @@ def resolve_ip_location(ip_str: str, enable_external_geoip: bool = False) -> str
 # ---------------------------------------------------------------------------
 # Allowlisted sort columns for /api/incidents to prevent SQL injection
 # ---------------------------------------------------------------------------
-_INCIDENTS_SORT_ALLOWLIST = {"id", "risk", "time", "username", "attack"}
+_INCIDENTS_SORT_ALLOWLIST = {
+    "id": "logs.id",
+    "risk": "logs.risk",
+    "time": "logs.time",
+    "username": "logs.username",
+    "attack": "logs.attack",
+    "status": "cases.status",
+    "assigned_username": "cases.assigned_username",
+}
 
 
 def _build_incidents_query(
@@ -159,9 +274,10 @@ def _build_incidents_query(
     per_page=25,
     date_from=None,
     date_to=None,
+    assigned_to=None,
 ):
     """
-    Constructs a parameterized SQL query for the incidents/logs table.
+    Constructs a parameterized SQL query for the incidents/logs table with cases join.
 
     All user-supplied filter values are bound via parameters (never interpolated).
     The sort column is validated against an explicit allowlist before insertion.
@@ -181,54 +297,70 @@ def _build_incidents_query(
             # Exact numeric ID or substring match, plus text fields
             exact_id = int(stripped_id)
             conditions.append(
-                "(id = ? OR CAST(id AS TEXT) LIKE ? OR username LIKE ? OR attack LIKE ? OR behavior LIKE ?)"
+                "(logs.id = ? OR CAST(logs.id AS TEXT) LIKE ? OR logs.username LIKE ? OR logs.attack LIKE ? OR logs.behavior LIKE ? OR cases.assigned_username LIKE ?)"
             )
-            params.extend([exact_id, f"%{stripped_id}%", term, term, term])
+            params.extend([exact_id, f"%{stripped_id}%", term, term, term, term])
         else:
             conditions.append(
-                "(CAST(id AS TEXT) LIKE ? OR username LIKE ? OR attack LIKE ? OR behavior LIKE ?)"
+                "(CAST(logs.id AS TEXT) LIKE ? OR logs.username LIKE ? OR logs.attack LIKE ? OR logs.behavior LIKE ? OR cases.assigned_username LIKE ?)"
             )
-            params.extend([term, term, term, term])
+            params.extend([term, term, term, term, term])
 
     # --- Severity filter (maps to risk score ranges) ---
     if severity:
         severity = severity.lower()
         if severity == "critical":
-            conditions.append("risk >= ?")
+            conditions.append("logs.risk >= ?")
             params.append(80)
         elif severity == "high":
-            conditions.append("risk >= ? AND risk < ?")
+            conditions.append("logs.risk >= ? AND logs.risk < ?")
             params.extend([60, 80])
         elif severity == "medium":
-            conditions.append("risk >= ? AND risk < ?")
+            conditions.append("logs.risk >= ? AND logs.risk < ?")
             params.extend([40, 60])
         elif severity == "low":
-            conditions.append("risk < ?")
+            conditions.append("logs.risk < ?")
             params.append(40)
 
     # --- Status filter ---
     if status and status != "all":
-        if status == "open":
-            conditions.append("resolved = ?")
+        st = status.lower()
+        if st == "open":
+            conditions.append("logs.resolved = ?")
             params.append(0)
-        elif status == "resolved":
-            conditions.append("resolved = ?")
+        elif st == "resolved":
+            conditions.append("logs.resolved = ?")
             params.append(1)
+        elif st in ("new", "investigating", "contained"):
+            conditions.append("cases.status = ?")
+            params.append(st)
 
     # --- Source filter ---
     if source and source != "all":
         if source == "simulated":
-            conditions.append("is_simulated = ?")
+            conditions.append("logs.is_simulated = ?")
             params.append(1)
         elif source == "telemetry":
-            conditions.append("is_simulated = ?")
+            conditions.append("logs.is_simulated = ?")
             params.append(0)
+
+    # --- Assigned To filter ---
+    if assigned_to is not None:
+        if str(assigned_to).lower() == "unassigned":
+            conditions.append("cases.assigned_to IS NULL")
+        else:
+            try:
+                uid = int(assigned_to)
+                conditions.append("cases.assigned_to = ?")
+                params.append(uid)
+            except (ValueError, TypeError):
+                pass
 
     # --- Date range filter ---
     if date_from:
         try:
             datetime.strptime(date_from, "%Y-%m-%d")
-            conditions.append("time >= ?")
+            conditions.append("logs.time >= ?")
             params.append(f"{date_from} 00:00:00")
         except ValueError:
             pass  # Ignore malformed dates silently
@@ -236,7 +368,7 @@ def _build_incidents_query(
     if date_to:
         try:
             datetime.strptime(date_to, "%Y-%m-%d")
-            conditions.append("time <= ?")
+            conditions.append("logs.time <= ?")
             params.append(f"{date_to} 23:59:59")
         except ValueError:
             pass
@@ -244,24 +376,38 @@ def _build_incidents_query(
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     # --- Sort column allowlist enforcement (prevents ORDER BY injection) ---
-    if sort_by not in _INCIDENTS_SORT_ALLOWLIST:
-        sort_by = "id"
+    col_order = _INCIDENTS_SORT_ALLOWLIST.get(sort_by, "logs.id")
     sort_dir = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
 
     base_select = f"""
-        SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
+        SELECT 
+            logs.id, logs.username, logs.attack, logs.behavior, logs.risk, logs.ip, logs.location, logs.time, logs.resolved, logs.is_simulated,
+            cases.status, cases.assigned_to, cases.assigned_username, cases.assigned_at,
+            cases.investigation_started_at, cases.contained_at, cases.resolved_at, cases.resolution_summary, cases.updated_at
         FROM logs
+        LEFT JOIN cases ON logs.id = cases.incident_id
         {where_clause}
-        ORDER BY {sort_by} {sort_dir}
+        ORDER BY {col_order} {sort_dir}
     """
 
-    count_select = f"SELECT COUNT(*) AS total FROM logs {where_clause}"
+    count_select = f"""
+        SELECT COUNT(*) AS total 
+        FROM logs 
+        LEFT JOIN cases ON logs.id = cases.incident_id 
+        {where_clause}
+    """
 
     return count_select, base_select, params
 
 
 def _row_to_dict(r):
-    """Converts a sqlite3.Row from the logs table to a plain dict."""
+    """Converts a sqlite3.Row from the logs table (with joined case data) to a plain dict."""
+    keys = r.keys()
+    is_sim = bool(r["is_simulated"]) if ("is_simulated" in keys and r["is_simulated"] is not None) else False
+    status_val = r["status"] if ("status" in keys and r["status"]) else None
+    if not status_val:
+        status_val = "resolved" if r["resolved"] == 1 else "new"
+
     return {
         "id": r["id"],
         "username": r["username"],
@@ -272,7 +418,16 @@ def _row_to_dict(r):
         "location": r["location"],
         "time": r["time"],
         "resolved": r["resolved"],
-        "is_simulated": bool(r["is_simulated"]),
+        "is_simulated": is_sim,
+        "status": status_val,
+        "assigned_to": r["assigned_to"] if ("assigned_to" in keys and r["assigned_to"] is not None and r["assigned_to"] != "") else None,
+        "assigned_username": r["assigned_username"] if ("assigned_username" in keys and r["assigned_username"]) else None,
+        "assigned_at": r["assigned_at"] if ("assigned_at" in keys and r["assigned_at"]) else None,
+        "investigation_started_at": r["investigation_started_at"] if ("investigation_started_at" in keys and r["investigation_started_at"]) else None,
+        "contained_at": r["contained_at"] if ("contained_at" in keys and r["contained_at"]) else None,
+        "resolved_at": r["resolved_at"] if ("resolved_at" in keys and r["resolved_at"]) else None,
+        "resolution_summary": r["resolution_summary"] if ("resolution_summary" in keys and r["resolution_summary"]) else None,
+        "updated_at": r["updated_at"] if ("updated_at" in keys and r["updated_at"]) else None,
     }
 
 
@@ -529,6 +684,7 @@ def create_app(test_config=None) -> Flask:
         sort_dir = request.args.get("sort_dir", "desc").strip()
         date_from = request.args.get("date_from", "").strip() or None
         date_to = request.args.get("date_to", "").strip() or None
+        assigned_to = request.args.get("assigned_to", "").strip() or None
 
         # Determine whether the caller wants paginated output
         page_raw = request.args.get("page")
@@ -556,6 +712,7 @@ def create_app(test_config=None) -> Flask:
             per_page=per_page,
             date_from=date_from,
             date_to=date_to,
+            assigned_to=assigned_to,
         )
 
         conn = get_db_connection(app.config["DATABASE_PATH"])
@@ -616,14 +773,18 @@ def create_app(test_config=None) -> Flask:
     @app.route("/api/incidents/<int:id>", methods=["GET"])
     @login_required
     def get_incident_detail(id: int):
-        """Returns full detail for a single incident by primary key."""
+        """Returns full detail for a single incident by primary key, including case status."""
         conn = get_db_connection(app.config["DATABASE_PATH"])
         c = conn.cursor()
         c.execute(
             """
-            SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
+            SELECT 
+                logs.id, logs.username, logs.attack, logs.behavior, logs.risk, logs.ip, logs.location, logs.time, logs.resolved, logs.is_simulated,
+                cases.status, cases.assigned_to, cases.assigned_username, cases.assigned_at,
+                cases.investigation_started_at, cases.contained_at, cases.resolved_at, cases.resolution_summary, cases.updated_at
             FROM logs
-            WHERE id = ?
+            LEFT JOIN cases ON logs.id = cases.incident_id
+            WHERE logs.id = ?
             """,
             (id,)
         )
@@ -699,6 +860,20 @@ def create_app(test_config=None) -> Flask:
             VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)
         """, (username, attack, behavior, risk, client_ip, location, timestamp))
         log_id = c.lastrowid
+
+        # Sprint 2: Create associated case in 'new' state and record audit log in same transaction
+        c.execute("""
+            INSERT INTO cases (incident_id, status, created_at, updated_at)
+            VALUES (?, 'new', ?, ?)
+        """, (log_id, timestamp, timestamp))
+
+        actor_id = session.get("user_id") or 1
+        actor_name = session.get("username", "simulator")
+        c.execute("""
+            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'incident_created', NULL, 'new', 'Incident simulated and registered in SOC case queue', ?)
+        """, (log_id, actor_id, actor_name, timestamp))
+
         conn.commit()
         conn.close()
 
@@ -714,7 +889,10 @@ def create_app(test_config=None) -> Flask:
                 "location": location,
                 "time": timestamp,
                 "resolved": 0,
-                "is_simulated": is_simulated
+                "is_simulated": is_simulated,
+                "status": "new",
+                "assigned_to": None,
+                "assigned_username": None,
             }
         }), 201
 
@@ -730,7 +908,34 @@ def create_app(test_config=None) -> Flask:
             conn.close()
             return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
 
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        summary = "Incident marked resolved"
+        data = request.get_json(silent=True)
+        if data and isinstance(data, dict) and data.get("summary") and isinstance(data.get("summary"), str):
+            summary = data.get("summary").strip()[:1000]
+
+        # Update both logs.resolved and cases.status in atomic transaction
         c.execute("UPDATE logs SET resolved = 1 WHERE id = ?", (id,))
+        
+        # Ensure case exists before updating
+        c.execute("SELECT incident_id FROM cases WHERE incident_id = ?", (id,))
+        if not c.fetchone():
+            c.execute("""
+                INSERT INTO cases (incident_id, status, created_at, updated_at, resolved_at, resolution_summary)
+                VALUES (?, 'resolved', ?, ?, ?, ?)
+            """, (id, now, now, now, summary))
+        else:
+            c.execute("""
+                UPDATE cases 
+                SET status = 'resolved', resolved_at = COALESCE(resolved_at, ?), resolution_summary = ?, updated_at = ?
+                WHERE incident_id = ?
+            """, (now, summary, now, id))
+
+        c.execute("""
+            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'incident_resolved', 'unresolved', 'resolved', ?, ?)
+        """, (id, session.get("user_id", 1), session.get("username", "admin"), summary, now))
+
         conn.commit()
         conn.close()
 
@@ -744,12 +949,831 @@ def create_app(test_config=None) -> Flask:
     @app.route("/clear_logs", methods=["POST"])
     @admin_required
     def clear_logs():
+        data = request.get_json(silent=True) or {}
+        force_purge = isinstance(data, dict) and data.get("force_purge_investigations") is True
+
         conn = get_db_connection(app.config["DATABASE_PATH"])
         c = conn.cursor()
+
+        # Check if active investigation notes, evidence, or open cases exist
+        c.execute("SELECT COUNT(*) FROM incident_notes")
+        notes_count = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM incident_evidence")
+        evidence_count = c.fetchone()[0]
+
+        if (notes_count > 0 or evidence_count > 0) and not force_purge:
+            conn.close()
+            return jsonify({
+                "status": "fail",
+                "error": "Active investigation cases or audit records exist. Set force_purge_investigations=true to permanently purge all cases, notes, evidence, and audit logs."
+            }), 400
+
+        # Transactional purge of investigation data and incident logs
+        c.execute("DELETE FROM incident_audit_log")
+        c.execute("DELETE FROM incident_evidence")
+        c.execute("DELETE FROM incident_notes")
+        c.execute("DELETE FROM cases")
         c.execute("DELETE FROM logs")
         conn.commit()
         conn.close()
-        return jsonify({"status": "success", "message": "All incident logs cleared"}), 200
+        return jsonify({"status": "success", "message": "All incident logs and investigation records cleared"}), 200
+
+    # ---------------------------------------------------------
+    # Sprint 2: SOC Investigation & Case Management Endpoints
+    # ---------------------------------------------------------
+
+    VALID_STATUS_TRANSITIONS = {
+        "new": {"investigating"},
+        "investigating": {"contained", "resolved"},
+        "contained": {"investigating", "resolved"},
+        "resolved": {"investigating"},  # Controlled reopening
+    }
+
+    def _ensure_case_row(c, incident_id: int):
+        """Ensures a case row exists for an incident, creating one idempotently if missing."""
+        c.execute("SELECT * FROM cases WHERE incident_id = ?", (incident_id,))
+        case_row = c.fetchone()
+        if not case_row:
+            c.execute("SELECT time, resolved FROM logs WHERE id = ?", (incident_id,))
+            log_row = c.fetchone()
+            if log_row:
+                st = "resolved" if log_row["resolved"] == 1 else "new"
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                c.execute("""
+                    INSERT INTO cases (incident_id, status, created_at, updated_at, resolved_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (incident_id, st, log_row["time"] or now, now, log_row["time"] if log_row["resolved"] == 1 else None))
+                c.execute("SELECT * FROM cases WHERE incident_id = ?", (incident_id,))
+                case_row = c.fetchone()
+        return case_row
+
+    @app.route("/api/incidents/<int:id>/case", methods=["GET"])
+    @login_required
+    def get_incident_case(id: int):
+        """Returns full case details, notes, evidence metadata, and audit timeline for an incident."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
+            FROM logs WHERE id = ?
+        """, (id,))
+        incident_row = c.fetchone()
+        if not incident_row:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
+
+        case_row = _ensure_case_row(c, id)
+        conn.commit()
+
+        # Notes ordered chronologically
+        c.execute("""
+            SELECT id, incident_id, author_id, author_username, content, created_at, updated_at
+            FROM incident_notes
+            WHERE incident_id = ?
+            ORDER BY created_at ASC, id ASC
+        """, (id,))
+        notes = [dict(r) for r in c.fetchall()]
+
+        # Evidence references ordered chronologically
+        c.execute("""
+            SELECT id, incident_id, title, evidence_type, source_ref, description, added_by_id, added_by_username, created_at
+            FROM incident_evidence
+            WHERE incident_id = ?
+            ORDER BY created_at ASC, id ASC
+        """, (id,))
+        evidence = [dict(r) for r in c.fetchall()]
+
+        # Audit activity history ordered chronologically
+        c.execute("""
+            SELECT id, incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at
+            FROM incident_audit_log
+            WHERE incident_id = ?
+            ORDER BY created_at ASC, id ASC
+        """, (id,))
+        activity = [dict(r) for r in c.fetchall()]
+
+        conn.close()
+
+        case_dict = dict(case_row) if case_row else {}
+
+        return jsonify({
+            "incident": _row_to_dict(incident_row),
+            "case": case_dict,
+            "notes": notes,
+            "evidence": evidence,
+            "activity": activity,
+        }), 200
+
+    @app.route("/api/incidents/<int:id>/case", methods=["PATCH"])
+    @app.route("/api/incidents/<int:id>/status", methods=["POST"])
+    @login_required
+    def update_case_status(id: int):
+        """
+        Updates the case lifecycle status enforcing valid state transitions and RBAC.
+        Valid transitions:
+          - new -> investigating
+          - investigating -> contained
+          - investigating -> resolved (requires resolution_summary)
+          - contained -> resolved (requires resolution_summary)
+          - contained -> investigating
+          - resolved -> investigating (reopening, requires reopen_reason)
+        """
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Bad Request", "message": "Invalid JSON body"}), 400
+
+        target_status = data.get("status")
+        if not target_status or not isinstance(target_status, str):
+            return jsonify({"error": "Bad Request", "message": "'status' field is required"}), 400
+        target_status = target_status.strip().lower()
+
+        resolution_summary = data.get("resolution_summary")
+        reopen_reason = data.get("reopen_reason") or data.get("summary")
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("SELECT id FROM logs WHERE id = ?", (id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
+
+        case_row = _ensure_case_row(c, id)
+        current_status = case_row["status"]
+        current_assignee_id = case_row["assigned_to"]
+
+        # Validate lifecycle state transition
+        allowed = VALID_STATUS_TRANSITIONS.get(current_status, set())
+        if target_status not in allowed:
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": f"Invalid status transition from '{current_status}' to '{target_status}'. Allowed transitions: {sorted(list(allowed))}."
+            }), 400
+
+        # RBAC Check:
+        user_role = session.get("role", "analyst")
+        user_id = session.get("user_id")
+        user_name = session.get("username", "analyst")
+
+        if user_role != "admin":
+            # If case is assigned to another analyst, forbid status alteration
+            if current_assignee_id is not None and current_assignee_id != user_id:
+                conn.close()
+                return jsonify({
+                    "error": "Forbidden",
+                    "message": "Incident is assigned to another analyst. Only the assigned analyst or an administrator can modify its status."
+                }), 403
+
+        # Validate required documentation
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if target_status == "resolved":
+            if not resolution_summary or not isinstance(resolution_summary, str) or len(resolution_summary.strip()) < 5:
+                conn.close()
+                return jsonify({
+                    "error": "Bad Request",
+                    "message": "A documented resolution summary of at least 5 characters is required to resolve a case."
+                }), 400
+            resolution_summary = resolution_summary.strip()[:2000]
+
+        if current_status == "resolved" and target_status == "investigating":
+            if not reopen_reason or not isinstance(reopen_reason, str) or len(reopen_reason.strip()) < 5:
+                conn.close()
+                return jsonify({
+                    "error": "Bad Request",
+                    "message": "A documented reopen reason of at least 5 characters is required to reopen a case."
+                }), 400
+            reopen_reason = reopen_reason.strip()[:2000]
+
+        # Execute transition in atomic transaction
+        auto_assigned = False
+        if current_status == "new" and target_status == "investigating" and current_assignee_id is None:
+            # Auto-claim unassigned case when analyst starts investigating
+            c.execute("""
+                UPDATE cases
+                SET status = 'investigating',
+                    assigned_to = ?,
+                    assigned_username = ?,
+                    assigned_at = ?,
+                    investigation_started_at = COALESCE(investigation_started_at, ?),
+                    updated_at = ?
+                WHERE incident_id = ?
+            """, (user_id, user_name, now, now, now, id))
+            auto_assigned = True
+            c.execute("UPDATE logs SET resolved = 0 WHERE id = ?", (id,))
+        elif target_status == "investigating":
+            c.execute("""
+                UPDATE cases
+                SET status = 'investigating',
+                    investigation_started_at = COALESCE(investigation_started_at, ?),
+                    resolved_at = NULL,
+                    updated_at = ?
+                WHERE incident_id = ?
+            """, (now, now, id))
+            c.execute("UPDATE logs SET resolved = 0 WHERE id = ?", (id,))
+        elif target_status == "contained":
+            c.execute("""
+                UPDATE cases
+                SET status = 'contained',
+                    contained_at = ?,
+                    updated_at = ?
+                WHERE incident_id = ?
+            """, (now, now, id))
+            c.execute("UPDATE logs SET resolved = 0 WHERE id = ?", (id,))
+        elif target_status == "resolved":
+            c.execute("""
+                UPDATE cases
+                SET status = 'resolved',
+                    resolved_at = ?,
+                    resolution_summary = ?,
+                    updated_at = ?
+                WHERE incident_id = ?
+            """, (now, resolution_summary, now, id))
+            c.execute("UPDATE logs SET resolved = 1 WHERE id = ?", (id,))
+
+        # Record Audit Log Entries
+        action_name = "status_change"
+        audit_desc = f"Status transitioned from {current_status} to {target_status}"
+        if current_status == "resolved" and target_status == "investigating":
+            action_name = "incident_reopened"
+            audit_desc = f"Case reopened by {user_name}. Reason: {reopen_reason}"
+        elif target_status == "resolved":
+            action_name = "incident_resolved"
+            audit_desc = f"Case resolved by {user_name}. Summary: {resolution_summary}"
+        elif target_status == "contained":
+            action_name = "incident_contained"
+            audit_desc = f"Incident marked contained by {user_name}"
+
+        c.execute("""
+            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (id, user_id, user_name, action_name, current_status, target_status, audit_desc, now))
+
+        if auto_assigned:
+            c.execute("""
+                INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+                VALUES (?, ?, ?, 'assignment_change', 'unassigned', ?, 'Auto-claimed on investigation start', ?)
+            """, (id, user_id, user_name, user_name, now))
+
+        conn.commit()
+
+        # Fetch updated case
+        c.execute("SELECT * FROM cases WHERE incident_id = ?", (id,))
+        updated_case = dict(c.fetchone())
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": f"Incident {id} status successfully updated to '{target_status}'",
+            "case": updated_case
+        }), 200
+
+    @app.route("/api/incidents/<int:id>/assign", methods=["POST"])
+    @login_required
+    def assign_case(id: int):
+        """
+        Assigns or reassigns an incident to an analyst or admin.
+        RBAC:
+          - Admin: can assign or reassign to any analyst/admin, or unassign.
+          - Analyst: can claim an unassigned case (assign to self), or unassign their own case. Cannot reassign others' cases.
+        """
+        data = request.get_json(silent=True) or {}
+        unassign = data.get("unassign") is True
+        target_uid = data.get("assigned_to")
+        target_user_str = data.get("username")
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("SELECT id FROM logs WHERE id = ?", (id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
+
+        case_row = _ensure_case_row(c, id)
+        current_assignee_id = case_row["assigned_to"]
+        current_assignee_name = case_row["assigned_username"] or "unassigned"
+
+        caller_role = session.get("role", "analyst")
+        caller_id = session.get("user_id")
+        caller_name = session.get("username", "analyst")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if unassign or target_uid is None and not target_user_str:
+            # Unassign logic
+            if caller_role != "admin" and current_assignee_id != caller_id:
+                conn.close()
+                return jsonify({
+                    "error": "Forbidden",
+                    "message": "Only administrators can unassign incidents assigned to another analyst."
+                }), 403
+
+            c.execute("""
+                UPDATE cases
+                SET assigned_to = NULL, assigned_username = NULL, assigned_at = NULL, updated_at = ?
+                WHERE incident_id = ?
+            """, (now, id))
+
+            c.execute("""
+                INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+                VALUES (?, ?, ?, 'assignment_change', ?, 'unassigned', 'Case unassigned', ?)
+            """, (id, caller_id, caller_name, current_assignee_name, now))
+
+            conn.commit()
+            conn.close()
+            return jsonify({
+                "status": "success",
+                "message": f"Incident {id} successfully unassigned",
+                "assigned_to": None,
+                "assigned_username": None
+            }), 200
+
+        # Resolving target user
+        if target_uid is not None:
+            try:
+                target_uid = int(target_uid)
+                c.execute("SELECT id, username, role FROM users WHERE id = ?", (target_uid,))
+            except (ValueError, TypeError):
+                conn.close()
+                return jsonify({"error": "Bad Request", "message": "Invalid user ID"}), 400
+        else:
+            c.execute("SELECT id, username, role FROM users WHERE username = ?", (str(target_user_str).strip(),))
+
+        target_user = c.fetchone()
+        if not target_user:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": "Target user not found"}), 404
+
+        target_id = target_user["id"]
+        target_name = target_user["username"]
+
+        # RBAC validation:
+        if caller_role != "admin":
+            # Analyst can only assign to themselves and only if unassigned
+            if current_assignee_id is not None and current_assignee_id != caller_id:
+                conn.close()
+                return jsonify({
+                    "error": "Forbidden",
+                    "message": "Only administrators can reassign incidents from another analyst."
+                }), 403
+            if target_id != caller_id:
+                conn.close()
+                return jsonify({
+                    "error": "Forbidden",
+                    "message": "Analysts can only claim incidents for themselves."
+                }), 403
+
+        c.execute("""
+            UPDATE cases
+            SET assigned_to = ?, assigned_username = ?, assigned_at = ?, updated_at = ?
+            WHERE incident_id = ?
+        """, (target_id, target_name, now, now, id))
+
+        c.execute("""
+            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'assignment_change', ?, ?, ?, ?)
+        """, (id, caller_id, caller_name, current_assignee_name, target_name, f"Assigned to {target_name} by {caller_name}", now))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": f"Incident {id} assigned to {target_name}",
+            "assigned_to": target_id,
+            "assigned_username": target_name
+        }), 200
+
+    @app.route("/api/incidents/<int:id>/notes", methods=["GET"])
+    @login_required
+    def get_case_notes(id: int):
+        """Returns all investigation findings and notes for an incident."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, incident_id, author_id, author_username, content, created_at, updated_at
+            FROM incident_notes
+            WHERE incident_id = ?
+            ORDER BY created_at ASC, id ASC
+        """, (id,))
+        notes = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(notes), 200
+
+    @app.route("/api/incidents/<int:id>/notes", methods=["POST"])
+    @login_required
+    def add_case_note(id: int):
+        """Adds a persistent investigation finding or note. Author identity is derived securely from the active session."""
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Bad Request", "message": "Invalid JSON body"}), 400
+
+        content = data.get("content")
+        if not content or not isinstance(content, str) or not content.strip():
+            return jsonify({"error": "Bad Request", "message": "Note content cannot be empty"}), 400
+
+        content = content.strip()
+        if len(content) > 4000:
+            return jsonify({"error": "Bad Request", "message": "Note content exceeds maximum length of 4000 characters"}), 400
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("SELECT id FROM logs WHERE id = ?", (id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
+
+        _ensure_case_row(c, id)
+
+        author_id = session["user_id"]
+        author_name = session.get("username", "analyst")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        c.execute("""
+            INSERT INTO incident_notes (incident_id, author_id, author_username, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (id, author_id, author_name, content, now, now))
+        note_id = c.lastrowid
+
+        c.execute("""
+            UPDATE cases SET updated_at = ? WHERE incident_id = ?
+        """, (now, id))
+
+        c.execute("""
+            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'note_added', NULL, ?, ?, ?)
+        """, (id, author_id, author_name, str(note_id), f"Investigation note added by {author_name}", now))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": "Investigation note added successfully",
+            "note": {
+                "id": note_id,
+                "incident_id": id,
+                "author_id": author_id,
+                "author_username": author_name,
+                "content": content,
+                "created_at": now,
+                "updated_at": now
+            }
+        }), 201
+
+    @app.route("/api/incidents/<int:id>/evidence", methods=["GET"])
+    @login_required
+    def get_case_evidence(id: int):
+        """Returns all evidence metadata references associated with an incident."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, incident_id, title, evidence_type, source_ref, description, added_by_id, added_by_username, created_at
+            FROM incident_evidence
+            WHERE incident_id = ?
+            ORDER BY created_at ASC, id ASC
+        """, (id,))
+        evidence = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(evidence), 200
+
+    @app.route("/api/incidents/<int:id>/evidence", methods=["POST"])
+    @login_required
+    def add_case_evidence(id: int):
+        """Attaches an evidence metadata reference (log excerpt, pcap reference, external threat link, etc.)."""
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Bad Request", "message": "Invalid JSON body"}), 400
+
+        title = data.get("title")
+        evidence_type = data.get("evidence_type", "log_excerpt")
+        source_ref = data.get("source_ref", "")
+        description = data.get("description", "")
+
+        if not title or not isinstance(title, str) or not title.strip():
+            return jsonify({"error": "Bad Request", "message": "Evidence title cannot be empty"}), 400
+        title = title.strip()[:150]
+
+        VALID_EVIDENCE_TYPES = {
+            "log_excerpt", "network_pcap", "external_report",
+            "ip_reputation", "hash_indicator", "screenshot_ref", "other"
+        }
+        if evidence_type not in VALID_EVIDENCE_TYPES:
+            evidence_type = "other"
+
+        if not isinstance(source_ref, str):
+            source_ref = ""
+        source_ref = source_ref.strip()[:500]
+
+        # Security check: reject executable or dangerous URL schemes
+        lower_ref = source_ref.lower()
+        if lower_ref.startswith(("javascript:", "data:", "vbscript:", "file:")):
+            return jsonify({"error": "Bad Request", "message": "Invalid or unsafe evidence reference format"}), 400
+
+        if not isinstance(description, str):
+            description = ""
+        description = description.strip()[:2000]
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("SELECT id FROM logs WHERE id = ?", (id,))
+        if not c.fetchone():
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Incident {id} not found"}), 404
+
+        _ensure_case_row(c, id)
+
+        author_id = session["user_id"]
+        author_name = session.get("username", "analyst")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        c.execute("""
+            INSERT INTO incident_evidence (incident_id, title, evidence_type, source_ref, description, added_by_id, added_by_username, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (id, title, evidence_type, source_ref, description, author_id, author_name, now))
+        evidence_id = c.lastrowid
+
+        c.execute("""
+            UPDATE cases SET updated_at = ? WHERE incident_id = ?
+        """, (now, id))
+
+        c.execute("""
+            INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+            VALUES (?, ?, ?, 'evidence_added', NULL, ?, ?, ?)
+        """, (id, author_id, author_name, str(evidence_id), f"Evidence '{title}' ({evidence_type}) attached by {author_name}", now))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": "Evidence reference attached successfully",
+            "evidence": {
+                "id": evidence_id,
+                "incident_id": id,
+                "title": title,
+                "evidence_type": evidence_type,
+                "source_ref": source_ref,
+                "description": description,
+                "added_by_id": author_id,
+                "added_by_username": author_name,
+                "created_at": now
+            }
+        }), 201
+
+    @app.route("/api/incidents/<int:id>/activity", methods=["GET"])
+    @login_required
+    def get_case_activity(id: int):
+        """Returns chronological investigation audit trail for an incident."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at
+            FROM incident_audit_log
+            WHERE incident_id = ?
+            ORDER BY created_at ASC, id ASC
+        """, (id,))
+        activity = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return jsonify(activity), 200
+
+    @app.route("/api/cases/my-queue", methods=["GET"])
+    @login_required
+    def get_my_queue():
+        """Returns cases assigned to the current authenticated analyst."""
+        current_uid = session["user_id"]
+        status = request.args.get("status", "all").strip()
+        search = request.args.get("search", "").strip() or None
+        severity = request.args.get("severity", "").strip() or None
+        page_raw = request.args.get("page")
+        per_page_raw = request.args.get("per_page")
+        paginated = page_raw is not None or per_page_raw is not None
+
+        try:
+            page = max(1, int(page_raw)) if page_raw else 1
+        except (ValueError, TypeError):
+            page = 1
+
+        try:
+            per_page = max(1, min(100, int(per_page_raw))) if per_page_raw else 25
+        except (ValueError, TypeError):
+            per_page = 25
+
+        count_sql, data_sql, params = _build_incidents_query(
+            search=search,
+            severity=severity,
+            status=status,
+            assigned_to=current_uid,
+            sort_by="risk",
+            sort_dir="desc",
+            page=page if paginated else None,
+            per_page=per_page,
+        )
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute(count_sql, params)
+        total = c.fetchone()[0]
+
+        if paginated:
+            offset = (page - 1) * per_page
+            paged_sql = data_sql + " LIMIT ? OFFSET ?"
+            c.execute(paged_sql, params + [per_page, offset])
+        else:
+            c.execute(data_sql, params)
+
+        rows = c.fetchall()
+        conn.close()
+
+        cases = [_row_to_dict(r) for r in rows]
+
+        if paginated:
+            total_pages = max(1, math.ceil(total / per_page))
+            return jsonify({
+                "cases": cases,
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total,
+                    "total_pages": total_pages,
+                    "has_next": page < total_pages,
+                    "has_prev": page > 1,
+                }
+            }), 200
+
+        return jsonify(cases), 200
+
+    @app.route("/api/cases/unassigned", methods=["GET"])
+    @login_required
+    def get_unassigned_cases():
+        """Returns open cases that are unassigned."""
+        count_sql, data_sql, params = _build_incidents_query(
+            status="open",
+            assigned_to="unassigned",
+            sort_by="risk",
+            sort_dir="desc",
+        )
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute(data_sql, params)
+        rows = c.fetchall()
+        conn.close()
+        return jsonify([_row_to_dict(r) for r in rows]), 200
+
+    @app.route("/api/metrics/investigations", methods=["GET"])
+    @login_required
+    def get_investigation_metrics():
+        """Returns aggregated SOC case management and workflow metrics."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        user_id = session.get("user_id")
+
+        # Counts by status
+        c.execute("SELECT COUNT(*) FROM cases WHERE status = 'new'")
+        new_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM cases WHERE status = 'investigating'")
+        investigating_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM cases WHERE status = 'contained'")
+        contained_count = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM cases WHERE status = 'resolved'")
+        resolved_count = c.fetchone()[0]
+
+        # Unassigned open cases
+        c.execute("SELECT COUNT(*) FROM cases WHERE status != 'resolved' AND assigned_to IS NULL")
+        unassigned_count = c.fetchone()[0]
+
+        # Cases in user's queue (assigned to caller and not resolved)
+        c.execute("SELECT COUNT(*) FROM cases WHERE status != 'resolved' AND assigned_to = ?", (user_id,))
+        my_queue_count = c.fetchone()[0]
+
+        # Critical unresolved cases
+        c.execute("""
+            SELECT COUNT(*) 
+            FROM logs 
+            JOIN cases ON logs.id = cases.incident_id 
+            WHERE logs.risk >= 80 AND cases.status != 'resolved'
+        """)
+        critical_unresolved = c.fetchone()[0]
+
+        # Average resolution duration
+        c.execute("""
+            SELECT created_at, investigation_started_at, resolved_at 
+            FROM cases 
+            WHERE status = 'resolved' AND resolved_at IS NOT NULL
+        """)
+        resolved_rows = c.fetchall()
+
+        durations = []
+        for r in resolved_rows:
+            try:
+                res_time = datetime.strptime(r["resolved_at"], "%Y-%m-%d %H:%M:%S")
+                start_str = r["investigation_started_at"] or r["created_at"]
+                if start_str:
+                    start_time = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+                    diff = (res_time - start_time).total_seconds()
+                    if diff >= 0:
+                        durations.append(diff)
+            except Exception:
+                pass
+
+        conn.close()
+
+        avg_seconds = round(sum(durations) / len(durations), 1) if durations else None
+        avg_human = None
+        if avg_seconds is not None:
+            mins, secs = divmod(int(avg_seconds), 60)
+            hours, mins = divmod(mins, 60)
+            if hours > 0:
+                avg_human = f"{hours}h {mins}m"
+            elif mins > 0:
+                avg_human = f"{mins}m {secs}s"
+            else:
+                avg_human = f"{secs}s"
+
+        return jsonify({
+            "new": new_count,
+            "investigating": investigating_count,
+            "contained": contained_count,
+            "resolved": resolved_count,
+            "unassigned": unassigned_count,
+            "my_queue": my_queue_count,
+            "critical_unresolved": critical_unresolved,
+            "avg_resolution_seconds": avg_seconds,
+            "avg_resolution_human": avg_human or "N/A"
+        }), 200
+
+    @app.route("/api/users/analysts", methods=["GET"])
+    @login_required
+    def get_analyst_users():
+        """Returns list of active analysts and administrators for case assignment selector."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute("SELECT id, username, role FROM users ORDER BY username ASC")
+        rows = c.fetchall()
+        conn.close()
+        return jsonify([{"id": r["id"], "username": r["username"], "role": r["role"]} for r in rows]), 200
+
+    @app.route("/api/users/create", methods=["POST"])
+    @admin_required
+    def create_user():
+        """Administrator-only user provisioning for adding SOC analysts or administrators."""
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Bad Request", "message": "Invalid JSON body"}), 400
+
+        username = data.get("username")
+        password = data.get("password")
+        role = data.get("role", "analyst")
+
+        if not username or not password or not isinstance(username, str) or not isinstance(password, str):
+            return jsonify({"error": "Bad Request", "message": "Username and password required"}), 400
+
+        username = username.strip()
+        if len(username) < 3 or len(username) > 64:
+            return jsonify({"error": "Bad Request", "message": "Username must be between 3 and 64 characters"}), 400
+
+        if len(password) < 8 or len(password) > 128:
+            return jsonify({"error": "Bad Request", "message": "Password must be between 8 and 128 characters"}), 400
+
+        if role not in ("analyst", "admin"):
+            role = "analyst"
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute("SELECT id FROM users WHERE username = ?", (username,))
+        if c.fetchone():
+            conn.close()
+            return jsonify({"error": "Conflict", "message": f"Username '{username}' already exists"}), 409
+
+        pw_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12))
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        c.execute("""
+            INSERT INTO users (username, password, role, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (username, pw_hash, role, now))
+        new_id = c.lastrowid
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": f"User '{username}' created successfully",
+            "user": {
+                "id": new_id,
+                "username": username,
+                "role": role,
+                "created_at": now
+            }
+        }), 201
 
     # ---------------------------------------------------------
     # Metrics Endpoint

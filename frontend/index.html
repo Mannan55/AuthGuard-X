@@ -110,6 +110,15 @@
           <span class="nav-label">Incidents</span>
         </a>
 
+        <a href="#my-queue" class="nav-link" data-view="my-queue">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/>
+            <line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>
+          </svg>
+          <span class="nav-label">My Queue</span>
+          <span id="nav-my-queue-count" class="badge badge-subtle nav-count" style="margin-left: auto; display: none;">0</span>
+        </a>
+
         <a href="#simulations" class="nav-link" data-view="simulations">
           <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
@@ -424,6 +433,321 @@
 
 
         <!-- ===================================================================
+             VIEW: MY WORK QUEUE (SPRINT 2)
+             =================================================================== -->
+        <section id="view-my-queue" class="view-panel">
+          
+          <!-- Queue Metric Header -->
+          <div class="queue-kpi-grid">
+            <div class="metric-card">
+              <span class="metric-label">My Active Cases</span>
+              <div id="kpi-my-cases" class="metric-value">0</div>
+              <span class="metric-sublabel">Assigned to your session</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Unassigned Incidents</span>
+              <div id="kpi-unassigned-cases" class="metric-value">0</div>
+              <span class="metric-sublabel">Available to claim</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Critical Unresolved</span>
+              <div id="kpi-crit-unresolved" class="metric-value highlight-danger">0</div>
+              <span class="metric-sublabel">Risk &ge; 80 requiring triage</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Avg Resolution Time</span>
+              <div id="kpi-avg-resolution" class="metric-value highlight-cyan">N/A</div>
+              <span class="metric-sublabel">Historical case metrics</span>
+            </div>
+          </div>
+
+          <!-- Queue Container Card -->
+          <div class="card">
+            <div class="table-toolbar">
+              <div class="toolbar-filters">
+                <button class="btn btn-secondary btn-sm active" data-queue-filter="active">Active Assigned</button>
+                <button class="btn btn-secondary btn-sm" data-queue-filter="all">All Assigned</button>
+                <button class="btn btn-secondary btn-sm" data-queue-filter="resolved">Resolved</button>
+              </div>
+            </div>
+
+            <!-- Queue Empty State -->
+            <div id="queue-empty-state" class="empty-state-sm" style="display: none; padding: var(--space-8) var(--space-4);">
+              <svg class="icon" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--color-text-muted); margin-bottom: var(--space-2);">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              <h4 style="color: var(--color-text-primary); margin-bottom: var(--space-1);">Queue is Clear</h4>
+              <p class="text-muted" style="font-size: var(--text-sm); max-width: 400px; margin: 0 auto;">No active incidents currently assigned to your account. You can claim open incidents from the Security Incident Feed.</p>
+            </div>
+
+            <!-- Queue Table -->
+            <div id="queue-table-wrapper" class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Case ID</th>
+                    <th>Attack Vector &amp; Target</th>
+                    <th>Risk Severity</th>
+                    <th>Status</th>
+                    <th>Source</th>
+                    <th>Detection Time</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="queue-table-body">
+                  <!-- Populated dynamically by investigation.js -->
+                </tbody>
+              </table>
+            </div>
+
+          </div>
+        </section>
+
+
+        <!-- ===================================================================
+             VIEW: INCIDENT INVESTIGATION WORKSPACE (SPRINT 2)
+             =================================================================== -->
+        <section id="view-investigation" class="view-panel">
+          
+          <!-- Top Breadcrumb & Action Toolbar -->
+          <div class="investigation-toolbar">
+            <div class="investigation-title-group">
+              <button id="investigation-back-btn" class="btn btn-ghost btn-sm" title="Return to Work Queue">
+                <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+                </svg>
+                <span>Back</span>
+              </button>
+              <span class="text-muted font-mono" style="font-size: var(--text-sm);">/ Investigations /</span>
+              <h3 id="case-view-attack" style="font-size: var(--text-lg); font-weight: var(--font-bold); color: var(--color-text-primary); margin: 0;">—</h3>
+              <span id="case-view-id" class="font-mono text-muted" style="font-size: var(--text-sm);">#—</span>
+              <span id="case-view-status-badge"></span>
+              <span id="case-view-severity-badge"></span>
+              <span id="case-view-prov-badge"></span>
+            </div>
+
+            <div class="investigation-actions">
+              <button id="case-claim-btn" class="btn btn-primary btn-sm" style="display: none;">Claim Case</button>
+              <button id="case-start-btn" class="btn btn-primary btn-sm" style="display: none;">Start Investigation</button>
+              <button id="case-contain-btn" class="btn btn-secondary btn-sm" style="display: none;">Mark Contained</button>
+              <button id="case-resolve-btn" class="btn btn-primary btn-sm" style="display: none;">Resolve Case</button>
+              <button id="case-reopen-btn" class="btn btn-secondary btn-sm" style="display: none;">Reopen Case</button>
+            </div>
+          </div>
+
+          <!-- Lifecycle Stepper Card -->
+          <div class="stepper-card">
+            <div style="font-size: var(--text-xs); color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--space-2); font-weight: var(--font-semibold);">
+              Incident Investigation Lifecycle
+            </div>
+            <div class="stepper-wrapper">
+              <div id="step-node-new" class="step-node active">
+                <div class="step-circle">1</div>
+                <span class="step-label">New</span>
+                <span id="step-time-new" class="step-timestamp">—</span>
+              </div>
+              <div id="step-node-investigating" class="step-node pending">
+                <div class="step-circle">2</div>
+                <span class="step-label">Investigating</span>
+                <span id="step-time-investigating" class="step-timestamp">—</span>
+              </div>
+              <div id="step-node-contained" class="step-node pending">
+                <div class="step-circle">3</div>
+                <span class="step-label">Contained</span>
+                <span id="step-time-contained" class="step-timestamp">—</span>
+              </div>
+              <div id="step-node-resolved" class="step-node pending">
+                <div class="step-circle">4</div>
+                <span class="step-label">Resolved</span>
+                <span id="step-time-resolved" class="step-timestamp">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Documented Resolution Summary Banner (when resolved) -->
+          <div id="case-resolution-summary-banner" class="card" style="display: none; background: rgba(34, 197, 94, 0.05); border-color: rgba(34, 197, 94, 0.25); margin-bottom: var(--space-4);">
+            <div class="card-header" style="margin-bottom: var(--space-1);">
+              <strong style="color: var(--color-success); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.05em;">Documented Resolution Summary</strong>
+            </div>
+            <p id="case-resolution-summary-text" style="color: var(--color-text-primary); font-size: var(--text-sm); line-height: 1.5; margin: 0;"></p>
+          </div>
+
+          <!-- 2-Column Responsive Workspace Grid -->
+          <div class="investigation-grid">
+
+            <!-- LEFT COLUMN: Event Details, Notes, Evidence -->
+            <div style="display: flex; flex-direction: column; gap: var(--space-4);">
+              
+              <!-- Stored Event Data Card -->
+              <div class="card">
+                <div class="card-header">
+                  <h4 class="card-title">Stored Event Telemetry</h4>
+                  <span class="text-muted" style="font-size: var(--text-xs);">Persisted detection record</span>
+                </div>
+
+                <div class="event-info-grid">
+                  <div class="event-info-item">
+                    <span class="event-info-label">Affected Account</span>
+                    <strong id="case-target-user" class="event-info-value text-primary">—</strong>
+                  </div>
+                  <div class="event-info-item">
+                    <span class="event-info-label">Behavior Profile</span>
+                    <span id="case-behavior-profile" class="event-info-value font-mono" style="font-size: var(--text-xs);">—</span>
+                  </div>
+                  <div class="event-info-item">
+                    <span class="event-info-label">Client IP Address</span>
+                    <span id="case-client-ip" class="event-info-value font-mono">—</span>
+                  </div>
+                  <div class="event-info-item">
+                    <span class="event-info-label">Origin Location</span>
+                    <span id="case-geo-location" class="event-info-value">—</span>
+                  </div>
+                  <div class="event-info-item full-width">
+                    <span class="event-info-label">Detection Timestamp</span>
+                    <span id="case-detection-time" class="event-info-value font-mono" style="font-size: var(--text-xs);">—</span>
+                  </div>
+                </div>
+
+                <div class="risk-meter-wrapper">
+                  <div style="display: flex; justify-content: space-between; font-size: var(--text-xs);">
+                    <span class="text-muted">Calculated Severity Score</span>
+                    <strong id="case-risk-score-value" class="font-mono">—</strong>
+                  </div>
+                  <div class="risk-meter-bar">
+                    <div id="case-risk-bar-fill" class="risk-meter-fill" style="width: 0%;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Investigation Notes & Findings Card -->
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h4 class="card-title">Analyst Investigation Notes</h4>
+                    <span class="text-muted" style="font-size: var(--text-xs);">Document triage findings, containment actions, and hypothesis validation</span>
+                  </div>
+                  <span id="case-notes-count" class="badge badge-subtle">0</span>
+                </div>
+
+                <div id="case-notes-list" class="notes-container" style="margin-bottom: var(--space-4);">
+                  <!-- Populated by investigation.js -->
+                </div>
+
+                <!-- Add Note Form -->
+                <div class="form-stacked" style="border-top: 1px solid var(--color-border); padding-top: var(--space-3);">
+                  <div class="form-group">
+                    <label for="note-content-input" class="form-label">Add Investigation Finding</label>
+                    <textarea id="note-content-input" class="form-input" rows="3" placeholder="Enter forensic observations, runbook execution notes, or containment details..."></textarea>
+                  </div>
+                  <div style="display: flex; justify-content: flex-end;">
+                    <button id="note-submit-btn" type="button" class="btn btn-primary btn-sm">Save Note</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Evidence Reference Management Card -->
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h4 class="card-title">Evidence References &amp; Artifacts</h4>
+                    <span class="text-muted" style="font-size: var(--text-xs);">Attach metadata pointers, sanitized log excerpts, IOC hashes, and external report links</span>
+                  </div>
+                  <span id="case-evidence-count" class="badge badge-subtle">0</span>
+                </div>
+
+                <div id="case-evidence-list" class="evidence-container" style="margin-bottom: var(--space-4);">
+                  <!-- Populated by investigation.js -->
+                </div>
+
+                <!-- Attach Evidence Form -->
+                <div class="form-stacked" style="border-top: 1px solid var(--color-border); padding-top: var(--space-3);">
+                  <div class="form-group">
+                    <label for="evidence-title-input" class="form-label">Evidence Title</label>
+                    <input id="evidence-title-input" type="text" class="form-input" placeholder="e.g. Auth Log Failure Excerpt (lines 1420-1455)">
+                  </div>
+                  <div class="grid-2-col" style="gap: var(--space-3);">
+                    <div class="form-group">
+                      <label for="evidence-type-select" class="form-label">Artifact Type</label>
+                      <select id="evidence-type-select" class="form-select">
+                        <option value="log_excerpt">Sanitized Log Excerpt</option>
+                        <option value="network_pcap">Network PCAP Reference</option>
+                        <option value="external_report">External Threat Intel Report</option>
+                        <option value="ip_reputation">IP Reputation Analysis</option>
+                        <option value="hash_indicator">Hash / IOC Indicator</option>
+                        <option value="screenshot_ref">Investigation Screenshot</option>
+                        <option value="other">Other Reference</option>
+                      </select>
+                    </div>
+                    <div class="form-group">
+                      <label for="evidence-ref-input" class="form-label">Source Pointer / Link</label>
+                      <input id="evidence-ref-input" type="text" class="form-input" placeholder="https:// or internal artifact ID">
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label for="evidence-desc-input" class="form-label">Context Description</label>
+                    <textarea id="evidence-desc-input" class="form-input" rows="2" placeholder="Summary of what this evidence proves or context for peer analysts..."></textarea>
+                  </div>
+                  <div style="display: flex; justify-content: flex-end;">
+                    <button id="evidence-submit-btn" type="button" class="btn btn-secondary btn-sm">Attach Evidence</button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- RIGHT COLUMN: Ownership, Status Controls, Audit History -->
+            <div style="display: flex; flex-direction: column; gap: var(--space-4);">
+              
+              <!-- Case Ownership & Assignment Card -->
+              <div class="card">
+                <div class="card-header">
+                  <h4 class="card-title">Case Ownership</h4>
+                  <span id="case-view-assignee-name" class="badge badge-telemetry">Unassigned</span>
+                </div>
+                
+                <div style="display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3);">
+                  <div class="user-avatar-sm" style="width: 32px; height: 32px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <strong id="owner-display-name" style="color: var(--color-text-primary); font-size: var(--text-sm); display: block;">Unassigned</strong>
+                    <span id="owner-assigned-time" class="text-muted" style="font-size: var(--text-xs);">Awaiting assignment</span>
+                  </div>
+                </div>
+
+                <!-- Admin Reassignment / Analyst Unassign Controls -->
+                <div style="display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap;">
+                  <select id="case-reassign-select" class="form-select" style="font-size: var(--text-xs); flex: 1; display: none;">
+                    <option value="">-- Reassign Analyst --</option>
+                  </select>
+                  <button id="case-reassign-btn" class="btn btn-secondary btn-sm" style="display: none;">Reassign</button>
+                  <button id="case-unassign-btn" class="btn btn-ghost btn-sm" style="display: none;">Unassign</button>
+                </div>
+              </div>
+
+              <!-- Activity Audit Trail Card -->
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h4 class="card-title">Investigation Activity Trail</h4>
+                    <span class="text-muted" style="font-size: var(--text-xs);">Chronological append-only event log</span>
+                  </div>
+                </div>
+
+                <div id="case-activity-timeline" class="activity-timeline">
+                  <!-- Populated by investigation.js -->
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        </section>
+
+
+        <!-- ===================================================================
              VIEW: SIMULATIONS (CYBER ATTACK SIMULATION LAB)
              =================================================================== -->
         <section id="view-simulations" class="view-panel">
@@ -651,8 +975,57 @@
       </div>
 
       <div class="modal-footer">
+        <button class="btn btn-secondary modal-investigate-btn">Open Investigation Workspace</button>
         <button class="btn btn-secondary" data-dismiss="modal">Close</button>
         <button class="btn btn-primary modal-resolve-btn">Resolve Incident</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sprint 2: Resolution Summary Modal -->
+  <div id="modal-resolve-case" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Resolve Incident Investigation</h3>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size: var(--text-sm); margin-bottom: var(--space-3);">
+          Document your resolution actions, findings, or containment confirmation. A meaningful summary is required to close this case.
+        </p>
+        <div class="form-group">
+          <label for="resolve-summary-input" class="form-label">Resolution Summary</label>
+          <textarea id="resolve-summary-input" class="form-input" rows="4" placeholder="e.g. Account credentials revoked, suspicious IP blocked at perimeter, verified no unauthorized persistence."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+        <button id="confirm-resolve-btn" class="btn btn-primary">Confirm Resolution</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sprint 2: Reopen Case Modal -->
+  <div id="modal-reopen-case" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Reopen Incident Investigation</h3>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size: var(--text-sm); margin-bottom: var(--space-3);">
+          Document the reason or new threat intelligence findings requiring this resolved incident to be reopened for active investigation.
+        </p>
+        <div class="form-group">
+          <label for="reopen-reason-input" class="form-label">Reopen Justification</label>
+          <textarea id="reopen-reason-input" class="form-input" rows="3" placeholder="e.g. Secondary telemetry alerts detected from the same origin IP; reopening for threat hunting."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+        <button id="confirm-reopen-btn" class="btn btn-secondary">Confirm Reopen</button>
       </div>
     </div>
   </div>
@@ -687,6 +1060,7 @@
   <script src="js/auth.js"></script>
   <script src="js/dashboard.js"></script>
   <script src="js/incidents.js"></script>
+  <script src="js/investigation.js"></script>
 
   <script>
     // ── Single Page View Router ──────────────────────────────────────
@@ -698,20 +1072,27 @@
         link.classList.remove('active');
       });
 
-      const targetPanel = document.getElementById(`view-${viewName}`) || document.getElementById('view-overview');
+      const baseView = viewName.split('?')[0];
+      const targetPanel = document.getElementById(`view-${baseView}`) || document.getElementById('view-overview');
       if (targetPanel) targetPanel.classList.add('active');
 
-      const activeLink = document.querySelector(`.sidebar-nav .nav-link[data-view="${viewName}"]`);
+      const activeLink = document.querySelector(`.sidebar-nav .nav-link[data-view="${baseView}"]`);
       if (activeLink) activeLink.classList.add('active');
 
       const titleEl = document.getElementById('page-title');
       const titles = {
         'overview': 'SOC Overview',
         'incidents': 'Security Incident Feed',
+        'my-queue': 'Analyst Incident Queue',
+        'investigation': 'Incident Investigation Workspace',
         'simulations': 'Attack Simulation Engine',
         'threat-map': 'Global Telemetry Vectors'
       };
-      if (titleEl) titleEl.textContent = titles[viewName] || 'SOC Workspace';
+      if (titleEl) titleEl.textContent = titles[baseView] || 'SOC Workspace';
+
+      if (baseView === 'my-queue' && window.Investigation && window.Investigation.loadWorkQueue) {
+        window.Investigation.loadWorkQueue();
+      }
     }
 
     // Hash navigation listener
@@ -736,6 +1117,7 @@
       window.Auth.init();
       window.Dashboard.init();
       window.Incidents.init();
+      window.Investigation.init();
 
       const initialHash = window.location.hash.replace('#', '') || 'overview';
       switchView(initialHash);

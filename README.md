@@ -5,37 +5,49 @@
 [![Flask](https://img.shields.io/badge/backend-Flask%203.1-black.svg)](https://flask.palletsprojects.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-AuthGuard-X is a professional Security Operations Center (SOC) demonstration, training, and incident triage platform designed for cybersecurity analysts, educators, and developers. It models an identity security monitoring system that detects, visualizes, and remediates suspicious authentication telemetry, credential attacks, and anomalous behavior.
+AuthGuard-X is a professional Security Operations Center (SOC) demonstration, training, and incident investigation platform designed for cybersecurity analysts, educators, and incident response teams. It models an identity security monitoring system that detects, visualizes, investigates, and remediates suspicious authentication telemetry, credential attacks, and anomalous behavior.
 
-> **Simulation Disclosure:** All attack vectors, threat geographic coordinates, and simulated incident streams are generated locally for training and demonstration purposes. AuthGuard-X does not claim to provide unverified live external threat intelligence or enterprise SIEM capabilities.
+> **Simulation & Telemetry Provenance Disclosure:** All attack vectors, simulated incident streams, and geographic origins are generated locally for training and demonstration purposes with server-enforced provenance (`is_simulated = 1`). AuthGuard-X does not execute live exploits or claim unverified external threat feeds.
 
 ---
 
-## Visual Demonstration (Sprint 1 Redesign)
+## Visual Demonstration & SOC Workspace (Sprint 2)
 
 | 1. Authentication Portal | 2. Operational SOC Overview |
 |:---:|:---:|
 | ![Login View](docs/screenshots/01_login_view.png) | ![Dashboard Overview](docs/screenshots/02_dashboard_overview.png) |
-| *Session-based login with dev credential guidance* | *Live KPI cards, severity distribution & threat timeline* |
+| *Session-based login with dev credential guidance* | *Live KPI cards, dynamic health score & threat timeline* |
 
 | 3. Advanced Incident Management Table | 4. Incident Detail Triage Modal |
 |:---:|:---:|
 | ![Incidents Table](docs/screenshots/03_incidents_table.png) | ![Incident Detail](docs/screenshots/04_incident_detail_modal.png) |
-| *Search, severity/status/source filters & pagination* | *Full audit metadata and one-click remediation* |
+| *Search by ID/text, severity/status/source filters & pagination* | *Audit metadata, one-click remediation & investigation routing* |
+
+| 5. Attack Simulation Lab | 6. Analyst Incident Work Queue |
+|:---:|:---:|
+| ![Simulations View](docs/screenshots/06_simulations_lab_view.png) | ![Case Queue View](docs/screenshots/07_case_queue_view.png) |
+| *Controlled synthetic vector injection with city/risk targeting* | *Queue isolation, active triage filters & real-time KPI metrics* |
+
+| 7. Investigation Workspace & Lifecycle Stepper | 8. Evidence Metadata & Audit Timeline |
+|:---:|:---:|
+| ![Investigation Workspace](docs/screenshots/08_investigation_workspace.png) | ![Timeline & Evidence](docs/screenshots/09_investigation_timeline_and_evidence.png) |
+| *State machine progression (`New` → `Investigating` → `Contained` → `Resolved`)* | *Sanitized notes, IOC/pcap evidence pointers & tamper-evident audit history* |
 
 <div align="center">
-  <img src="docs/screenshots/05_mobile_layout.png" width="360" alt="Mobile Responsive Layout" />
-  <p><em>Responsive mobile analyst layout with collapsible navigation</em></p>
+  <img src="docs/screenshots/10_mobile_investigation_view.png" width="360" alt="Mobile Responsive Investigation Layout" />
+  <p><em>Responsive mobile analyst investigation layout with zero horizontal overflow</em></p>
 </div>
 
 ---
 
 ## Cybersecurity & SOC Use Cases
 
-1. **Analyst Triage Training**: Train junior security analysts in evaluating incoming authentication anomalies, differentiating between low-priority alerts and high-risk credential-stuffing attacks.
-2. **Incident Lifecycle Remediation**: Experience end-to-end incident management: identification, risk scoring, status progression (`OPEN` to `RESOLVED`), and health metric recovery.
-3. **Attack Vector Simulation**: Inject controlled simulated telemetry (e.g., high-velocity brute force, automated bot stuffing, geographic velocity anomalies) to observe dashboard telemetry impacts.
-4. **Defensive Hardening Reference**: Learn secure Flask architecture practices: cryptographic password hashing, server-verified sessions, CSRF protection, role-based access control (RBAC), XSS prevention, and strict origin controls.
+1. **Structured Case Investigation Training**: Transition junior and tier-2 analysts from basic alert closing to a rigorous 4-stage lifecycle state machine (**New → Investigating → Contained → Resolved**).
+2. **Analyst Ownership & Queue Triage**: Model multi-analyst SOC shift workflows where analysts claim unassigned incidents, manage personal active queues, and collaborate with role-based isolation.
+3. **Forensic Findings & Evidence Collection**: Capture timestamped triage observations, hypothesis testing notes, and attach structured evidence pointers (IOC hashes, network PCAP references, log excerpts) with URL scheme safety validation.
+4. **Accountability & Tamper-Evident Auditing**: Maintain an append-only audit trail logging every state transition, analyst reassignment, and containment timestamp with server-derived actor identity.
+5. **Attack Vector Simulation Engine**: Generate synthetic credential-stuffing, lateral traversal, and Kerberoasting telemetry to evaluate detection posture and test analyst workflows.
+6. **Defensive Hardening Reference**: Production-grade Flask architecture featuring bcrypt password hashing (12 rounds), signed session cookies, CSRF protection, RBAC middleware, and XSS sanitization.
 
 ---
 
@@ -44,63 +56,93 @@ AuthGuard-X is a professional Security Operations Center (SOC) demonstration, tr
 ```
                       +---------------------------------------+
                       |       Web Browser (Frontend)         |
-                      |  - Modular HTML5 / Vanilla JS (ES6+)  |
+                      |  - Modular Vanilla JS (ES6+)          |
                       |  - Design Tokens & 8px Spacing Grid   |
-                      |  - Chart.js Telemetry Graph           |
+                      |  - Investigation Lifecycle Stepper    |
+                      |  - Real-time Work Queue & Metrics     |
                       |  - XSS-Safe DOM Sanitization          |
                       +-------------------+-------------------+
                                           |
                         HTTP / JSON (REST)| Session Cookies + CSRF Token
-                       SameSite=Lax       | HttpOnly + X-CSRFToken
+                        SameSite=Lax      | HttpOnly + X-CSRFToken
                                           v
                       +-------------------+-------------------+
                       |      Flask Application Server         |
                       |  - Session Auth & RBAC Middleware     |
-                      |  - Flask-WTF CSRF Token Verification  |
+                      |  - Lifecycle State Machine Engine     |
+                      |  - Flask-WTF CSRF Token Enforcement   |
                       |  - Rate Limiting (Flask-Limiter)      |
-                      |  - Query Search, Filter, Sort, Pages  |
-                      |  - Server-Derived Aggregated Metrics  |
-                      |  - Safe Geolocation (Offline-First)   |
-                      |  - Security Error Handlers            |
+                      |  - Search, Filter, Sort, Pagination   |
+                      |  - Evidence Reference URL Validation  |
+                      |  - Transactional Audit Logger         |
                       +-------------------+-------------------+
                                           |
                                           v
                       +-------------------+-------------------+
-                      |       Persistence Engine              |
-                      |  - SQLite (authguard.db)              |
-                      |  - Users (bcrypt password hashes)     |
-                      |  - Incidents (Telemetry & Simulation) |
+                      |       Persistence Engine (SQLite)     |
+                      |  - `users`: bcrypt hashed credentials |
+                      |  - `logs`: Incident telemetry records |
+                      |  - `cases`: Lifecycle status & owners |
+                      |  - `incident_notes`: Forensic notes   |
+                      |  - `incident_evidence`: Metadata/IOCs |
+                      |  - `incident_audit_log`: Audit trail  |
                       +---------------------------------------+
 ```
+
+---
+
+## Investigation Lifecycle State Machine
+
+AuthGuard-X implements an enterprise SOC incident response lifecycle:
+
+```
+    [ New ] --------( Start Investigation / Claim )--------> [ Investigating ]
+                                                                   |
+                                                                   | ( Mark Contained )
+                                                                   v
+    [ Resolved ] <-------( Resolve + Document Summary )------ [ Contained ]
+         |
+         +----------( Reopen + Mandatory Justification )-----> [ Investigating ]
+```
+
+### State Machine Rules:
+- **New → Investigating**: Permitted for assigned analyst or when claiming unassigned incident. Sets `investigation_started_at`.
+- **Investigating → Contained**: Indicates isolation of affected host, credential rotation, or firewall block. Sets `contained_at`.
+- **Contained → Resolved**: Requires a mandatory, non-trivial resolution summary (minimum 5 characters) explaining root cause and remediation. Sets `resolved_at` and synchronizes legacy `logs.resolved = 1`.
+- **Investigating → Resolved**: Direct resolution permitted with mandatory resolution summary.
+- **Resolved → Investigating (Reopening)**: Requires mandatory justification. Resets `logs.resolved = 0` and increments `reopen_count`.
+- **Invalid Transitions**: Any backward jump without reopening (e.g., `Resolved → Contained`, `Contained → New`) is strictly rejected with `400 Bad Request`.
+
+---
+
+## Role-Based Access Control (RBAC) Matrix
+
+| Endpoint / Operation | Analyst | Administrator | Unauthenticated |
+|---|:---:|:---:|:---:|
+| `GET /api/incidents` (Search/Filter/List) | Allowed | Allowed | 401 Unauthorized |
+| `GET /api/incidents/<id>/case` (Details) | Allowed | Allowed | 401 Unauthorized |
+| `PATCH /api/incidents/<id>/case` (Lifecycle) | Assigned / Claimed Only | Allowed Any | 401 Unauthorized |
+| `POST /api/incidents/<id>/assign` (Self-Claim) | Unassigned Only | Allowed Any | 401 Unauthorized |
+| `POST /api/incidents/<id>/assign` (Reassign Others) | 403 Forbidden | Allowed | 401 Unauthorized |
+| `POST /api/incidents/<id>/notes` (Add Note) | Allowed | Allowed | 401 Unauthorized |
+| `POST /api/incidents/<id>/evidence` (Add IOC) | Allowed | Allowed | 401 Unauthorized |
+| `GET /api/cases/my-queue` (Personal Queue) | Personal Cases | Personal Cases | 401 Unauthorized |
+| `GET /api/cases/unassigned` (Unclaimed) | Allowed | Allowed | 401 Unauthorized |
+| `POST /api/incidents/clear` (Purge Protection) | 403 Forbidden | Requires Confirmation / Force Purge | 401 Unauthorized |
+| `POST /api/users/create` (Create Analyst) | 403 Forbidden | Allowed | 401 Unauthorized |
 
 ---
 
 ## Technology Stack
 
 - **Backend Framework**: Python 3.11+ / Flask 3.1
-- **Security & Crypto**: `bcrypt` (adaptive blowfish hashing, 12 rounds), `secrets` (CSPRNG session keys)
+- **Security & Cryptography**: `bcrypt` (adaptive blowfish hashing, 12 rounds), `secrets` (CSPRNG session keys)
 - **CSRF & Form Defense**: `Flask-WTF` CSRF protection with `/api/auth/csrf-token` endpoint
-- **Session & CORS Management**: Flask Session (`HttpOnly`, `SameSite=Lax`, `Secure` in production), `Flask-Cors` (restricted origin whitelist with credential support)
+- **Session & Origin Management**: Flask Session (`HttpOnly`, `SameSite=Lax`, `Secure` in production), `Flask-Cors` (strict whitelist)
 - **Traffic Protection**: `Flask-Limiter` (IP-based endpoint rate throttling)
 - **Frontend Architecture**: Modular Vanilla JavaScript (ES6+), design tokens (`tokens.css`), responsive layout (`layout.css`), accessible components (`components.css`), Chart.js
-- **Database**: SQLite3 with connection pooling and schema migration guards
-- **Testing**: `pytest` test suite with 60 comprehensive automated tests
-
----
-
-## Security Model & Hardening
-
-| Vulnerability Addressed | Previous Vulnerable State | Hardened Implementation |
-|---|---|---|
-| **Credentials** | Hardcoded `admin` / `admin123` in source | Hashed with bcrypt (12 rounds). Managed via `.env`. Provisioned exclusively in `development` mode; disabled in `production`. |
-| **Authentication** | Dummy client-side check, no session | Server-signed session cookies (`HttpOnly`, `SameSite=Lax`). Protection against session fixation and replay. |
-| **CSRF Protection** | Missing on mutating requests | `Flask-WTF` CSRF token verification across all state-changing endpoints with pre-flight token issuance. |
-| **Access Control** | Open unauthenticated API access | Protected via `@login_required` and `@admin_required` decorators across all incident and resolution routes. |
-| **Simulation Provenance** | Client could claim simulated as live | Server strictly enforces `is_simulated = 1` on all simulation ingestion routes. |
-| **Cross-Site Scripting (XSS)** | Raw `innerHTML` template interpolation | Strict HTML escaping helper (`escapeHTML`) and safe DOM manipulation for all dynamic attack log feeds. |
-| **CORS Policy** | Unrestricted wildcard (`*`) | Strict origin whitelist configurable via `CORS_ALLOWED_ORIGINS`. |
-| **IP Privacy** | Plaintext HTTP IP leak to `http://ip-api.com` | Offline internal/loopback resolution. External GeoIP disabled by default; HTTPS enforced if enabled. |
-| **DoS / Brute Force** | Unlimited rapid requests permitted | Rate limiting applied (`RATE_LIMIT_LOGIN`, `RATE_LIMIT_SIMULATE`). Input boundary and type validation. |
+- **Database Engine**: SQLite3 with strict foreign keys (`PRAGMA foreign_keys = ON`), indexed lookups, and idempotent migrations
+- **Automated QA**: Pytest suite (88 tests) and headless Chrome CDP browser automation (15 real assertions)
 
 ---
 
@@ -128,14 +170,10 @@ pip install -r backend/requirements.txt
 
 ### 2. Configure Environment Variables
 
-Copy the provided `.env.example` file:
-
 ```powershell
-# On Windows
-copy .env.example .env
-
-# On Linux / macOS
-cp .env.example .env
+# Copy the provided environment template
+cp .env.example .env    # On Linux / macOS
+copy .env.example .env  # On Windows
 ```
 
 Key environment configuration variables:
@@ -162,40 +200,29 @@ python backend/app.py
 Open your browser to:
 **[http://127.0.0.1:5000](http://127.0.0.1:5000)**
 
-In development mode (`AUTHGUARD_ENV=development`), the default demo analyst account (`admin` / `DemoAdminPassword2026!`) is automatically provisioned for immediate evaluation.
+Default development accounts:
+- **Administrator**: `admin` / `DemoAdminPassword2026!`
+- **Tier-1 Analyst**: `analyst_john` / `AnalystJohn2026!`
+- **Tier-2 Analyst**: `analyst_jane` / `AnalystJane2026!`
 
 ---
 
 ## Automated Verification & Testing
 
-The project includes an automated test suite verifying security controls, access control rules, XSS sanitization, session expiration, and persistence across restarts.
+The project includes two comprehensive layers of automated verification:
 
 ```powershell
-# Run the complete test suite (60 tests)
+# 1. Run the complete Pytest suite (88 tests)
 pytest tests -v
+
+# 2. Run real-browser visual and functional verification (15 assertions + screenshots)
+python scripts/capture_evidence.py
 ```
 
-### Test Coverage Highlights
-- **Phase 1 Baseline** (`tests/test_auth_guard.py`): 15 tests covering health checks, login validation, session state, unauthenticated access blocking, and persistence.
-- **Sprint 1 Upgrades** (`tests/test_sprint1.py`): 45 tests covering:
-  - CSRF token endpoint and validation.
-  - Strict simulation provenance enforcement.
-  - Server-side derived metrics endpoint and health score bounds.
-  - Paginated incident response envelope (`page`, `per_page`, `total`, `total_pages`).
-  - Search across attack, username, and behavior fields.
-  - Severity, status, and source query filters.
-  - Safe column sorting against allowlists (SQL injection resistant).
-  - Incident detail retrieval and 404 handling.
-  - XSS resilience with hostile payload strings.
-
----
-
-## Limitations & Roadmap (Sprint 2)
-
-- **Single Host Storage**: Currently persists to single-node SQLite suitable for local labs and training. High-concurrency clustering with PostgreSQL is planned for Sprint 2.
-- **Simulated Geographic Visualization**: Attack map markers are generated based on simulated vector coordinates rather than live GPS telemetry.
-- **Multi-Factor Authentication**: Single-factor password verification is enforced; MFA (TOTP / WebAuthn) will be integrated in Sprint 2.
-- **Rules Engine**: Risk scoring utilizes deterministic heuristics. An adaptive anomaly detection rules engine is scheduled for future sprints.
+### Test Suite Distribution (88 Tests Total)
+- **Phase 1 Baseline** (`tests/test_auth_guard.py` — 15 tests): Health check, login validation, session state, unauthenticated access blocking, and persistence across restarts.
+- **Sprint 1 Professional UI & Hardening** (`tests/test_sprint1.py` — 54 tests): CSRF validation, simulation provenance enforcement, server-derived metrics, pagination envelopes, search/filter/sort allowlists, detail endpoints, and XSS resistance.
+- **Sprint 2 Advanced SOC Investigation** (`tests/test_sprint2.py` — 19 tests): Idempotent database migrations, automatic case creation, 4-stage lifecycle state machine, reopening workflow, mandatory resolution summary, analyst claiming/assignment RBAC, persistent investigation notes, evidence metadata validation, administrative log purge protection, personal queue isolation, and CSRF enforcement on case APIs.
 
 ---
 

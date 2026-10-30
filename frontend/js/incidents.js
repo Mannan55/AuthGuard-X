@@ -98,7 +98,8 @@
       tr.setAttribute('data-id', inc.id);
 
       const sevBadge = window.UI.renderSeverityBadge(inc.risk);
-      const statusBadge = window.UI.renderStatusBadge(inc.resolved);
+      const caseStatus = (inc.status || (inc.resolved ? 'resolved' : 'new')).toLowerCase();
+      const statusBadge = `<span class="badge badge-status-${caseStatus}">${caseStatus.toUpperCase()}</span>`;
       const sourceBadge = window.UI.renderSourceBadge(inc.is_simulated);
       const timeStr = window.UI.formatDate(inc.time);
 
@@ -117,6 +118,7 @@
         <td class="time-cell text-muted">${timeStr}</td>
         <td class="actions-cell">
           <div style="display:inline-flex;gap:4px;">
+            <button class="btn btn-sm btn-primary investigate-trigger" data-id="${inc.id}" title="Investigate in Workspace">Investigate</button>
             <button class="btn btn-sm btn-ghost view-detail-trigger" data-id="${inc.id}" title="View Details">Details</button>
             ${actionBtn}
           </div>
@@ -127,6 +129,16 @@
     });
 
     // Wire action triggers
+    tbody.querySelectorAll('.investigate-trigger').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        if (window.Investigation && window.Investigation.openCase) {
+          window.Investigation.openCase(id);
+        }
+      });
+    });
+
     tbody.querySelectorAll('.resolve-trigger').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -197,6 +209,16 @@
             window.UI.closeModal('incident-modal');
           };
         }
+      }
+
+      const investigateModalBtn = modal.querySelector('.modal-investigate-btn');
+      if (investigateModalBtn) {
+        investigateModalBtn.onclick = () => {
+          window.UI.closeModal('incident-modal');
+          if (window.Investigation && window.Investigation.openCase) {
+            window.Investigation.openCase(inc.id);
+          }
+        };
       }
 
       window.UI.openModal('incident-modal');

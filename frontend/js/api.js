@@ -175,6 +175,73 @@
     metrics: {
       async get() {
         return apiFetch('/api/metrics');
+      },
+      async investigations() {
+        return apiFetch('/api/metrics/investigations');
+      }
+    },
+
+    cases: {
+      async getCase(id) {
+        return apiFetch(`/api/incidents/${id}/case`);
+      },
+      async updateStatus(id, payload) {
+        return apiFetch(`/api/incidents/${id}/case`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
+        });
+      },
+      async assign(id, payload) {
+        return apiFetch(`/api/incidents/${id}/assign`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      },
+      async getNotes(id) {
+        return apiFetch(`/api/incidents/${id}/notes`);
+      },
+      async addNote(id, content) {
+        return apiFetch(`/api/incidents/${id}/notes`, {
+          method: 'POST',
+          body: JSON.stringify({ content })
+        });
+      },
+      async getEvidence(id) {
+        return apiFetch(`/api/incidents/${id}/evidence`);
+      },
+      async addEvidence(id, payload) {
+        return apiFetch(`/api/incidents/${id}/evidence`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      },
+      async getActivity(id) {
+        return apiFetch(`/api/incidents/${id}/activity`);
+      },
+      async myQueue(params = {}) {
+        const query = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && v !== '' && v !== 'all') {
+            query.append(k, v);
+          }
+        });
+        const qs = query.toString();
+        return apiFetch(`/api/cases/my-queue${qs ? `?${qs}` : ''}`);
+      },
+      async unassigned() {
+        return apiFetch('/api/cases/unassigned');
+      },
+      async metrics() {
+        return apiFetch('/api/metrics/investigations');
+      },
+      async getAnalysts() {
+        return apiFetch('/api/users/analysts');
+      },
+      async createUser(payload) {
+        return apiFetch('/api/users/create', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
       }
     }
   };

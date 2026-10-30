@@ -540,8 +540,188 @@ def run_full_verification():
         time.sleep(1)
         browser.screenshot("05_mobile_layout.png")
 
+        # Restore Desktop 1440x900 for Sprint 2 journeys
+        browser.resize(1440, 900)
+        time.sleep(1)
+
+        # ── Assertion 12: Work Queue View Navigation, KPIs & Queue Listing ────────
+        print("\n[Assert 12] Verifying Analyst Work Queue View, Metric Cards & Table...")
+        browser.evaluate("switchView('my-queue');")
+        time.sleep(1.5)
+        queue_display = browser.evaluate("window.getComputedStyle(document.getElementById('view-my-queue')).display")
+        assert queue_display != "none", "My Queue view must be visible when navigated"
+
+        queue_audit = browser.evaluate("""
+            (() => {
+                const myCases = document.getElementById('kpi-my-cases').textContent.trim();
+                const unassigned = document.getElementById('kpi-unassigned-cases').textContent.trim();
+                const crit = document.getElementById('kpi-crit-unresolved').textContent.trim();
+                return { myCases, unassigned, crit };
+            })()
+        """)
+        print(f"  Queue KPIs: MyCases={queue_audit['myCases']}, Unassigned={queue_audit['unassigned']}, CritUnresolved={queue_audit['crit']}")
+        passed_assertions += 1
+        print("  -> Passed: Analyst work queue view verified with KPI metrics.")
+
+        browser.screenshot("07_case_queue_view.png")
+
+        # ── Assertion 13: Journey A — Investigation Lifecycle Workflow ─────────
+        print("\n[Assert 13] Verifying Journey A: Investigation Lifecycle, Notes, Evidence & Resolution...")
+        journey_a_result = browser.evaluate("""
+            (async () => {
+                // 1. Create a fresh test incident to investigate
+                const sim = await window.API.incidents.simulate({
+                    attack: "Advanced Kerberoasting Simulation",
+                    risk: 86,
+                    behavior: "ticket_extraction",
+                    simulated_location: "Frankfurt, Germany"
+                });
+                const incId = sim.incident.id;
+
+                // 2. Open case in Investigation Workspace
+                await window.Investigation.openCase(incId);
+                await new Promise(r => setTimeout(r, 800));
+
+                const initialStatus = document.getElementById('step-node-new').classList.contains('active');
+
+                // 3. Start Investigation (new -> investigating)
+                await window.Investigation.executeStatusTransition('investigating');
+                await new Promise(r => setTimeout(r, 600));
+                const isInvestigating = document.getElementById('step-node-investigating').classList.contains('active');
+
+                // 4. Add persistent note
+                await window.API.cases.addNote(incId, "Forensic analysis: extracted Kerberos SPN ticket requests across service accounts.");
+                await window.Investigation.refreshCaseData();
+                await new Promise(r => setTimeout(r, 600));
+                const notesCount = document.querySelectorAll('#case-notes-list .note-card').length;
+
+                // 5. Add evidence metadata reference
+                await window.API.cases.addEvidence(incId, {
+                    title: "Captured SPN Ticket Hashes",
+                    evidence_type: "hash_indicator",
+                    source_ref: "SHA256:d41d8cd98f00b204e9800998ecf8427e",
+                    description: "Encrypted TGS ticket response extracted from domain controller network trace."
+                });
+                await window.Investigation.refreshCaseData();
+                await new Promise(r => setTimeout(r, 600));
+                const evidenceCount = document.querySelectorAll('#case-evidence-list .evidence-card').length;
+
+                // 6. Mark Contained (investigating -> contained)
+                await window.Investigation.executeStatusTransition('contained');
+                await new Promise(r => setTimeout(r, 600));
+                const isContained = document.getElementById('step-node-contained').classList.contains('active');
+
+                // 7. Resolve Case via Modal with Summary
+                await window.Investigation.executeStatusTransition(
+                    'resolved',
+                    "Service account passwords rotated to 32-character AES-256 strings. SPN request monitoring enabled. Investigation concluded."
+                );
+                await new Promise(r => setTimeout(r, 800));
+
+                const isResolved = document.getElementById('step-node-resolved').classList.contains('active');
+                const summaryBannerVisible = document.getElementById('case-resolution-summary-banner').style.display !== 'none';
+                const summaryText = document.getElementById('case-resolution-summary-text').textContent;
+
+                return {
+                    incId,
+                    initialStatus,
+                    isInvestigating,
+                    notesCount,
+                    evidenceCount,
+                    isContained,
+                    isResolved,
+                    summaryBannerVisible,
+                    summaryText
+                };
+            })()
+        """)
+        print(f"  Journey A Execution: {journey_a_result}")
+        assert journey_a_result["initialStatus"], "Initial case state must be New"
+        assert journey_a_result["isInvestigating"], "Case must transition to Investigating"
+        assert journey_a_result["notesCount"] >= 1, "Notes list must render newly added note"
+        assert journey_a_result["evidenceCount"] >= 1, "Evidence list must render newly attached evidence"
+        assert journey_a_result["isContained"], "Case must transition to Contained"
+        assert journey_a_result["isResolved"], "Case must transition to Resolved"
+        assert journey_a_result["summaryBannerVisible"], "Resolution summary banner must be visible"
+        assert "AES-256" in journey_a_result["summaryText"], "Resolution summary text must match submitted content"
+        passed_assertions += 1
+        print("  -> Passed: Complete Journey A investigation workflow verified end-to-end.")
+
+        browser.screenshot("08_investigation_workspace.png")
+        browser.screenshot("09_investigation_timeline_and_evidence.png")
+
+        # ── Assertion 14: Journey B — Analyst Assignment & Queue Isolation ────
+        print("\n[Assert 14] Verifying Journey B: Case Assignment & Work Queue Isolation...")
+        journey_b_result = browser.evaluate("""
+            (async () => {
+                // 1. Create incident as admin and assign to analyst_john
+                const sim = await window.API.incidents.simulate({
+                    attack: "Lateral SMB Named Pipe Impersonation",
+                    risk: 80,
+                    behavior: "named_pipe_leak"
+                });
+                const incId = sim.incident.id;
+
+                // Assign to analyst_john
+                await window.API.cases.assign(incId, { username: "analyst_john" });
+
+                // 2. Log in as analyst_john
+                await window.API.auth.logout();
+                await window.API.auth.login("analyst_john", "AnalystJohn2026!");
+                await new Promise(r => setTimeout(r, 800));
+
+                // 3. Check John's queue contains this incident
+                const johnQueue = await window.API.cases.myQueue();
+                const foundInQueue = johnQueue.some(c => c.id === incId);
+
+                // 4. Try unauthorized reassignment to analyst_jane (should fail with 403)
+                let blockedUnauthorized = false;
+                try {
+                    await window.API.cases.assign(incId, { username: "analyst_jane" });
+                } catch (err) {
+                    if (err.status === 403) blockedUnauthorized = true;
+                }
+
+                // 5. Restore admin session
+                await window.API.auth.logout();
+                await window.API.auth.login("admin", "DemoAdminPassword2026!");
+                await new Promise(r => setTimeout(r, 800));
+
+                return {
+                    incId,
+                    foundInQueue,
+                    blockedUnauthorized
+                };
+            })()
+        """)
+        print(f"  Journey B Execution: {journey_b_result}")
+        assert journey_b_result["foundInQueue"], "Assigned case must appear in analyst's queue"
+        assert journey_b_result["blockedUnauthorized"], "Unauthorized case reassignment by analyst must be blocked with 403"
+        passed_assertions += 1
+        print("  -> Passed: Journey B case assignment and analyst queue isolation verified.")
+
+        # ── Assertion 15: Mobile 390px Responsive Investigation Workspace ─────
+        print("\n[Assert 15] Verifying Investigation Workspace on 390px Mobile Viewport...")
+        browser.evaluate("switchView('investigation');")
+        browser.resize(390, 844)
+        time.sleep(1)
+        mobile_investigation_overflow = browser.evaluate("""
+            (() => {
+                const docW = document.documentElement.scrollWidth;
+                const winW = window.innerWidth;
+                const headerW = document.querySelector('.investigation-toolbar') ? document.querySelector('.investigation-toolbar').scrollWidth : 0;
+                return { docW, winW, headerW, hasHScroll: docW > winW };
+            })()
+        """)
+        print(f"  Mobile Investigation Layout Check: {mobile_investigation_overflow}")
+        assert not mobile_investigation_overflow["hasHScroll"], f"Horizontal scroll detected in mobile investigation: {mobile_investigation_overflow}"
+        passed_assertions += 1
+        print("  -> Passed: Mobile 390px investigation workspace layout rendered with zero horizontal overflow.")
+
+        browser.screenshot("10_mobile_investigation_view.png")
+
         print("\n========================================================")
-        print(f"ALL REAL-BROWSER ASSERTIONS PASSED ({passed_assertions}/11)")
+        print(f"ALL REAL-BROWSER ASSERTIONS PASSED ({passed_assertions}/15)")
         print("Updated evidence screenshots saved to docs/screenshots/")
         print("========================================================")
 
