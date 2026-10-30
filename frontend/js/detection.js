@@ -146,9 +146,12 @@
 
     tableBody.innerHTML = rules.map(rule => {
       const isEnabled = rule.status === 'enabled';
+      const isArchived = rule.status === 'archived';
       const statusBadge = isEnabled
         ? `<span class="badge badge-success">Enabled</span>`
-        : `<span class="badge badge-resolved">Disabled</span>`;
+        : (isArchived
+            ? `<span class="badge badge-secondary" style="opacity: 0.85;">Archived</span>`
+            : `<span class="badge badge-resolved">Disabled</span>`);
 
       const sevClass = getSeverityBadgeClass(rule.severity);
       const sevLabel = (rule.severity || 'medium').toUpperCase();
@@ -167,15 +170,16 @@
       const correlationSummary = `&ge; ${rule.threshold} ev / ${rule.time_window_seconds}s (${rule.group_by_field || 'none'})`;
 
       const adminControls = isAdmin ? `
-        <button class="btn btn-ghost btn-sm btn-rule-toggle" data-rule-id="${window.UI.escapeHTML(rule.rule_id)}" title="${isEnabled ? 'Disable rule' : 'Enable rule'}">
-          ${isEnabled ? 'Disable' : 'Enable'}
+        <button class="btn btn-ghost btn-sm btn-rule-toggle" data-rule-id="${window.UI.escapeHTML(rule.rule_id)}" title="${isEnabled ? 'Disable rule' : (isArchived ? 'Re-enable archived rule' : 'Enable rule')}">
+          ${isEnabled ? 'Disable' : (isArchived ? 'Unarchive' : 'Enable')}
         </button>
         <button class="btn btn-secondary btn-sm btn-rule-edit" data-rule-id="${window.UI.escapeHTML(rule.rule_id)}" title="Edit rule configuration">
           Edit
         </button>
-        <button class="btn btn-ghost btn-sm text-danger btn-rule-delete" data-rule-id="${window.UI.escapeHTML(rule.rule_id)}" title="Delete rule">
-          Delete
-        </button>
+        ${!isArchived ? `
+        <button class="btn btn-ghost btn-sm text-danger btn-rule-delete" data-rule-id="${window.UI.escapeHTML(rule.rule_id)}" title="Archive rule (preserves history)">
+          Archive
+        </button>` : ''}
       ` : `
         <span class="text-muted text-xs">Read-only</span>
       `;
@@ -249,19 +253,19 @@
 
   async function handleDeleteRule(ruleId) {
     const confirmed = await window.UI.showConfirmDialog({
-      title: 'Delete Detection Rule',
-      message: `Are you sure you want to permanently delete rule "${ruleId}"? Historical alerts created by this rule will be preserved.`,
-      confirmText: 'Delete Rule',
+      title: 'Archive Detection Rule',
+      message: `Are you sure you want to archive detection rule "${ruleId}"? Archived rules stop evaluating, but all historical alerts, audit logs, and investigation references are safely preserved.`,
+      confirmText: 'Archive Rule',
       isDanger: true
     });
     if (!confirmed) return;
 
     try {
       await window.API.detection.deleteRule(ruleId);
-      window.UI.showToast(`Rule ${ruleId} successfully deleted.`, 'success');
+      window.UI.showToast(`Rule ${ruleId} successfully archived.`, 'success');
       loadRules();
     } catch (err) {
-      window.UI.showToast(`Failed to delete rule: ${err.message}`, 'error');
+      window.UI.showToast(`Failed to archive rule: ${err.message}`, 'error');
     }
   }
 

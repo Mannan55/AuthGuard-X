@@ -242,7 +242,7 @@ def test_rule_update_with_optimistic_locking(authed_admin):
     assert res.get_json()["rule"]["threshold"] == 5
 
 def test_rule_toggle_and_delete(authed_admin):
-    """Verify toggling enabled/disabled status and deletion."""
+    """Verify toggling enabled/disabled status and soft deletion / archival."""
     client, _, _, _ = authed_admin
 
     res = client.post("/api/detection/rules/RULE-BURST-004/toggle")
@@ -253,7 +253,7 @@ def test_rule_toggle_and_delete(authed_admin):
     assert res.status_code == 200
     assert res.get_json()["status"] == "enabled"
 
-    # Delete custom rule
+    # Soft delete / archive custom rule
     client.post("/api/detection/rules", json={
         "rule_id": "RULE-DEL-001",
         "name": "Rule to delete",
@@ -261,6 +261,8 @@ def test_rule_toggle_and_delete(authed_admin):
     })
     del_res = client.delete("/api/detection/rules/RULE-DEL-001")
     assert del_res.status_code == 200
+    assert del_res.get_json()["status"] == "success"
+    assert del_res.get_json()["rule"]["status"] == "archived"
 
 # =========================================================================
 # FEATURE 2: THREAT CORRELATION & SLIDING TIME WINDOW ENGINE
@@ -270,9 +272,9 @@ def test_correlation_single_event_immediate_alert(authed_admin):
     """A rule with threshold=1 triggers an alert immediately upon log creation."""
     client, _, _, _ = authed_admin
 
-    # RULE-EXPLOIT-003: threshold=1, risk >= 80, severity critical
+    # RULE-EXPLOIT-003: threshold=1, risk >= 75, attack contains 'Lateral'
     sim_res = client.post("/api/incidents/simulate", json={
-        "attack": "Zero-Day Kernel Exploit",
+        "attack": "Lateral SMB Named Pipe Impersonation",
         "risk": 95,
         "behavior": "privilege_escalation",
         "city": "Frankfurt, Germany"
@@ -359,7 +361,7 @@ def test_idempotency_prevents_duplicate_alerts(authed_admin):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cur = db.execute(
             "INSERT INTO logs (time, ip, attack, risk, behavior, location, username, is_simulated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (now, "198.51.100.1", "Kernel Exploit", 90, "privilege_escalation", "Berlin", "root", 1)
+            (now, "198.51.100.1", "Lateral SMB Named Pipe Exploit", 90, "privilege_escalation", "Berlin", "root", 1)
         )
         db.commit()
         log_id = cur.lastrowid
@@ -480,3 +482,218 @@ def test_detection_metrics_endpoint(authed_admin):
     assert "severity_breakdown" in metrics
     assert "top_triggered_rules" in metrics
     assert metrics["active_rules"] >= 6
+    assert "evaluated_events" in metrics
+    assert "total_events_stored" in metrics
+    assert metrics["evaluated_events"] == metrics["total_events_stored"]
+
+
+# =========================================================================
+# SPRINT 3 POST-INTEGRATION CORRECTIONS & REGRESSION SUITE
+# =========================================================================
+
+def test_soft_deletion_preserves_historical_alerts_and_audit_log(authed_admin):
+    """Archiving a rule stops evaluation but preserves all historical alerts, execution history, and audit log entries."""
+    client, _, db_path, app = authed_admin
+
+    # 1. Create a custom rule
+    c_res = client.post("/api/detection/rules", json={
+        "rule_id": "RULE-ARCHIVE-TEST",
+        "name": "Archival Retention Rule",
+        "severity": "medium",
+        "conditions": [{"field": "attack", "operator": "contains", "value": "ArchiveTrigger"}],
+        "threshold": 1,
+        "time_window_seconds": 60
+    })
+    assert c_res.status_code == 201
+
+    # 2. Trigger an incident to generate an alert from this rule
+    with app.app_context():
+        db = get_db_connection(db_path)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur = db.execute(
+            "INSERT INTO logs (time, ip, attack, risk, behavior, location, username, is_simulated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, "10.10.10.10", "ArchiveTrigger Event", 60, "test_behavior", "Dallas", "user_arch", 1)
+        )
+        db.commit()
+        log_id = cur.lastrowid
+        alerts = evaluate_detection_pipeline([log_id], db_path)
+        assert len(alerts) >= 1
+        matching = [a for a in alerts if a["rule_id"] == "RULE-ARCHIVE-TEST"]
+        assert len(matching) == 1
+        generated_alert_id = matching[0]["alert_id"]
+
+    # 3. Administratively archive the rule via DELETE endpoint
+    del_res = client.delete("/api/detection/rules/RULE-ARCHIVE-TEST")
+    assert del_res.status_code == 200
+    del_data = del_res.get_json()
+    assert del_data["status"] == "success"
+    assert del_data["rule"]["status"] == "archived"
+
+    # 4. Verify rule is marked as archived in GET
+    detail_res = client.get("/api/detection/rules/RULE-ARCHIVE-TEST")
+    assert detail_res.status_code == 200
+    rule_detail = detail_res.get_json()["rule"]
+    assert rule_detail["status"] == "archived"
+    assert any(a["action"] == "archived" for a in rule_detail["audit_log"])
+
+    # 5. Verify the historical alert STILL EXISTS and is fully accessible
+    alert_get = client.get(f"/api/detection/alerts/{generated_alert_id}")
+    assert alert_get.status_code == 200
+    assert alert_get.get_json()["alert"]["alert_id"] == generated_alert_id
+
+    # 6. Verify archived rule DOES NOT EXECUTE on new incoming events
+    with app.app_context():
+        db = get_db_connection(db_path)
+        now2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur2 = db.execute(
+            "INSERT INTO logs (time, ip, attack, risk, behavior, location, username, is_simulated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (now2, "10.10.10.11", "ArchiveTrigger Event 2", 65, "test_behavior", "Dallas", "user_arch", 1)
+        )
+        db.commit()
+        log_id2 = cur2.lastrowid
+        new_alerts = evaluate_detection_pipeline([log_id2], db_path)
+        archived_rule_alerts = [a for a in new_alerts if a["rule_id"] == "RULE-ARCHIVE-TEST"]
+        assert len(archived_rule_alerts) == 0  # Must not fire while archived!
+
+
+def test_rule_specificity_and_distinct_behaviors(authed_admin):
+    """Verify rules enforce genuine behavior attributes and multi-behavior rules require distinct behavior values."""
+    client, _, db_path, app = authed_admin
+
+    with app.app_context():
+        db = get_db_connection(db_path)
+        now = datetime.now()
+
+        # 1. Port scan rule (RULE-NET-002) requires scan/recon behavior, not merely high risk!
+        # Insert 3 high-risk events without scan behavior -> Should NOT trigger RULE-NET-002
+        test_ip = "192.168.99.1"
+        for i in range(3):
+            t_str = (now - timedelta(seconds=20 * (3 - i))).strftime("%Y-%m-%d %H:%M:%S")
+            db.execute("""
+                INSERT INTO logs (time, ip, attack, risk, behavior, location, username, is_simulated)
+                VALUES (?, ?, 'High Risk Action', 70, 'generic_action', 'Tokyo', 'user1', 1)
+            """, (t_str, test_ip))
+        db.commit()
+        cur = db.execute("SELECT id FROM logs WHERE ip = ? ORDER BY id DESC LIMIT 1", (test_ip,))
+        last_id = cur.fetchone()["id"]
+        res_alerts = evaluate_detection_pipeline([last_id], db_path)
+        net_alerts = [a for a in res_alerts if a["rule_id"] == "RULE-NET-002"]
+        assert len(net_alerts) == 0  # No scan behavior -> No port scan alert!
+
+        # 2. Multi-behavior rule (RULE-BEHAV-005) requires distinct behaviors:
+        # 2 events with identical behavior 'manual' -> Should NOT trigger
+        test_user = "user_same_behav"
+        for i in range(2):
+            t_str = (now - timedelta(seconds=15 * (2 - i))).strftime("%Y-%m-%d %H:%M:%S")
+            db.execute("""
+                INSERT INTO logs (time, ip, attack, risk, behavior, location, username, is_simulated)
+                VALUES (?, '10.0.0.1', 'Action', 50, 'manual', 'London', ?, 1)
+            """, (t_str, test_user))
+        db.commit()
+        cur = db.execute("SELECT id FROM logs WHERE username = ? ORDER BY id DESC LIMIT 1", (test_user,))
+        last_id = cur.fetchone()["id"]
+        res_alerts2 = evaluate_detection_pipeline([last_id], db_path)
+        behav_alerts = [a for a in res_alerts2 if a["rule_id"] == "RULE-BEHAV-005"]
+        assert len(behav_alerts) == 0  # Identical behaviors do not satisfy multi-behavior rule
+
+        # Now add an event with a DIFFERENT behavior ('privilege_escalation')
+        t_str_diff = now.strftime("%Y-%m-%d %H:%M:%S")
+        db.execute("""
+            INSERT INTO logs (time, ip, attack, risk, behavior, location, username, is_simulated)
+            VALUES (?, '10.0.0.1', 'Privilege Step', 60, 'privilege_escalation', 'London', ?, 1)
+        """, (t_str_diff, test_user))
+        db.commit()
+        cur = db.execute("SELECT id FROM logs WHERE username = ? ORDER BY id DESC LIMIT 1", (test_user,))
+        diff_id = cur.fetchone()["id"]
+        res_alerts3 = evaluate_detection_pipeline([diff_id], db_path)
+        behav_alerts2 = [a for a in res_alerts3 if a["rule_id"] == "RULE-BEHAV-005"]
+        assert len(behav_alerts2) == 1  # 2 distinct behaviors ('manual', 'privilege_escalation') -> Triggers!
+
+
+def test_alert_correlation_update_and_deduplication(authed_admin):
+    """Adding new events to an active correlation window updates the existing alert without creating duplicate alert storms."""
+    client, _, _, _ = authed_admin
+
+    # Run replay once
+    res1 = client.post("/api/detection/replay", json={"preset": "recon_burst"})
+    assert res1.status_code == 201
+
+    alerts_res1 = client.get("/api/detection/alerts?severity=medium")
+    alerts1 = alerts_res1.get_json()["alerts"]
+    recon_alerts1 = [a for a in alerts1 if a["rule_id"] == "RULE-NET-002" or a.get("rule_code") == "RULE-NET-002"]
+    assert len(recon_alerts1) >= 1
+    initial_alert = recon_alerts1[0]
+    initial_count = initial_alert["matched_count"]
+
+    # Run replay a second time with same preset
+    res2 = client.post("/api/detection/replay", json={"preset": "recon_burst"})
+    assert res2.status_code == 201
+
+    alerts_res2 = client.get("/api/detection/alerts?severity=medium")
+    alerts2 = alerts_res2.get_json()["alerts"]
+    recon_alerts2 = [a for a in alerts2 if a["rule_id"] == "RULE-NET-002" or a.get("rule_code") == "RULE-NET-002"]
+
+    # Active correlation update: The existing alert is updated, preventing duplicate alert storm
+    assert len(recon_alerts2) == len(recon_alerts1)
+    updated_alert = [a for a in recon_alerts2 if a["alert_id"] == initial_alert["alert_id"]][0]
+    assert updated_alert["matched_count"] >= initial_count
+
+
+def test_alert_escalation_authorization_and_cross_analyst_protection(test_env):
+    """Verify alert escalation validates target incident existence, relationship to alert, and cross-analyst ownership."""
+    client, _, db_path, app = test_env
+
+    # Admin client creates a replay alert
+    admin = app.test_client()
+    admin.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+    rep_res = admin.post("/api/detection/replay", json={"preset": "credential_spray"})
+    assert rep_res.status_code == 201
+
+    alerts_res = admin.get("/api/detection/alerts")
+    alert = alerts_res.get_json()["alerts"][0]
+    alert_id = alert["alert_id"]
+    matched_ids = alert["matched_incident_ids"]
+
+    # 1. Invalid incident ID (non-existent) rejected
+    bad_res = admin.post(f"/api/detection/alerts/{alert_id}/escalate", json={"incident_id": 999999})
+    assert bad_res.status_code in (400, 404)
+
+    # 2. Unrelated incident ID (exists but not part of this alert) rejected
+    with app.app_context():
+        db = get_db_connection(db_path)
+        cur = db.execute(
+            "INSERT INTO logs (time, ip, attack, risk, behavior, location, username, is_simulated) VALUES ('2026-10-31 00:00:00', '1.1.1.1', 'Other', 20, 'none', 'Paris', 'other_user', 1)"
+        )
+        db.commit()
+        unrelated_id = cur.lastrowid
+
+    unrel_res = admin.post(f"/api/detection/alerts/{alert_id}/escalate", json={"incident_id": unrelated_id})
+    assert unrel_res.status_code == 400
+    assert "not part of this alert" in unrel_res.get_json()["message"]
+
+    # 3. Cross-analyst escalation protection:
+    # Assign target incident's case to analyst_jane
+    target_id = matched_ids[0]
+    with app.app_context():
+        db = get_db_connection(db_path)
+        # Find analyst_jane id
+        jane_row = db.execute("SELECT id FROM users WHERE username = 'analyst_jane'").fetchone()
+        jane_id = jane_row["id"]
+        db.execute("UPDATE cases SET assigned_to = ?, assigned_username = 'analyst_jane' WHERE incident_id = ?", (jane_id, target_id))
+        db.commit()
+
+    # Now login as analyst_john (different analyst)
+    john = app.test_client()
+    john.post("/api/auth/login", json={"username": "analyst_john", "password": "AnalystJohn2026!"})
+    john_res = john.post(f"/api/detection/alerts/{alert_id}/escalate", json={"incident_id": target_id})
+    assert john_res.status_code == 403
+    assert "assigned to another analyst" in john_res.get_json()["message"]
+
+    # 4. Valid escalation by Admin or assigned analyst succeeds
+    admin_esc = admin.post(f"/api/detection/alerts/{alert_id}/escalate", json={"incident_id": target_id})
+    assert admin_esc.status_code == 200
+    assert admin_esc.get_json()["status"] == "escalated"
+
+    # 5. Repeated escalation to same incident is rejected with 409 Conflict
+    repeat_res = admin.post(f"/api/detection/alerts/{alert_id}/escalate", json={"incident_id": target_id})
+    assert repeat_res.status_code == 409

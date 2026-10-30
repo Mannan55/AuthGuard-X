@@ -33,6 +33,16 @@ AuthGuard-X is a professional Security Operations Center (SOC) demonstration, tr
 | ![Investigation Workspace](docs/screenshots/08_investigation_workspace.png) | ![Timeline & Evidence](docs/screenshots/09_investigation_timeline_and_evidence.png) |
 | *State machine progression (`New` → `Investigating` → `Contained` → `Resolved`)* | *Sanitized notes, IOC/pcap evidence pointers & append-only activity audit trail* |
 
+| 9. Detection Alerts Feed & Threat Correlation | 10. Detection Rules Catalog & MITRE Mapping |
+|:---:|:---:|
+| ![Detection Alerts](docs/screenshots/11_detection_alerts_workspace.png) | ![Detection Rules](docs/screenshots/12_detection_rules_workspace.png) |
+| *High-fidelity correlated alerts, sliding-window grouping & 1-click case escalation* | *Enterprise rule catalog, MITRE ATT&CK techniques & safe condition builder* |
+
+| 11. Correlated Alert Detail & Explainability | 12. Mobile Responsive Alerts Layout |
+|:---:|:---:|
+| ![Alert Detail Modal](docs/screenshots/13_detection_alert_detail_modal.png) | ![Mobile Alerts](docs/screenshots/14_mobile_detection_alerts_390px.png) |
+| *Dynamic explainability narrative, ATT&CK links & correlated incident logs* | *Flawless responsive rendering on 390px, 768px, 1440px, and 1920px viewports* |
+
 <div align="center">
   <img src="docs/screenshots/10_mobile_investigation_view.png" width="360" alt="Mobile Responsive Investigation Layout" />
   <p><em>Responsive mobile analyst investigation layout with zero horizontal overflow</em></p>
@@ -160,20 +170,21 @@ AuthGuard-X features a database-backed detection rule engine and a sliding time-
 
 | Rule ID | Rule Name | MITRE ATT&CK ID | ATT&CK Technique | Window / Threshold | Severity |
 |---|---|:---:|---|:---:|:---:|
-| `RULE-AUTH-001` | High-Volume Credential Stuffing | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) | Brute Force: Password Guessing | 60s / 3 per target | Critical |
-| `RULE-NET-002` | Port Reconnaissance Burst | [T1046](https://attack.mitre.org/techniques/T1046/) | Network Service Discovery | 45s / 3 per source IP | High |
-| `RULE-EXPLOIT-003` | Critical Exploit Pattern Detected | [T1190](https://attack.mitre.org/techniques/T1190/) | Exploit Public-Facing Application | 0s / 1 event | Critical |
-| `RULE-BURST-004` | Distributed Multi-User Attack Burst | [T1078](https://attack.mitre.org/techniques/T1078/) | Valid Accounts | 120s / 5 total events | High |
-| `RULE-BEHAV-005` | Anomalous Shell Execution Behavior | [T1059](https://attack.mitre.org/techniques/T1059/) | Command and Scripting Interpreter | 30s / 2 per source IP | Medium |
-| `RULE-KERB-006` | Suspicious Kerberos Ticket Request | [T1558.003](https://attack.mitre.org/techniques/T1558/003/) | Steal or Forge Kerberos Tickets: Kerberoasting | 0s / 1 event | High |
+| `RULE-AUTH-001` | Single-Account Brute Force & Credential Stuffing | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) | Brute Force: Password Guessing | 60s / 3 per target username | Critical |
+| `RULE-NET-002` | Port Scanning Reconnaissance Probe | [T1046](https://attack.mitre.org/techniques/T1046/) | Network Service Discovery | 45s / 3 per source IP (scan behavior + risk >= 50) | High |
+| `RULE-EXPLOIT-003` | Lateral SMB Named Pipe Traversal | [T1021.002](https://attack.mitre.org/techniques/T1021/002/) | Remote Services: SMB/Windows Admin Shares | 0s / 1 event (lateral attribute + risk >= 75) | Critical |
+| `RULE-BURST-004` | Multi-Target Password Spraying | [T1110.003](https://attack.mitre.org/techniques/T1110/003/) | Brute Force: Password Spraying | 120s / 5 total events | High |
+| `RULE-BEHAV-005` | Multi-Behavior Anomaly Chain | [T1078](https://attack.mitre.org/techniques/T1078/) | Valid Accounts | 180s / 2 distinct non-empty behaviors | Medium |
+| `RULE-KERB-006` | Active Directory Kerberoasting | [T1558.003](https://attack.mitre.org/techniques/T1558/003/) | Steal or Forge Kerberos Tickets: Kerberoasting | 0s / 1 event (SPN extraction) | High |
 
 ### Safe Rule Condition Evaluation Engine
 - **Allowed Fields**: `attack`, `username`, `ip_address`, `severity`, `risk_score`, `behavior`.
-- **Allowed Operators**: `equals`, `contains`, `greater_than`, `less_than`, `in`, `regex_safe`, `not_empty`.
+- **Allowed Operators**: `eq`, `neq`, `contains`, `not_contains`, `gte`, `lte`, `gt`, `lt`, `in`, `not_empty` (with backwards-compatible aliases `equals`, `greater_than`, `less_than`, `regex_safe`).
 - **Zero Eval**: All comparisons execute strictly through typed Python AST comparisons with regex timeouts, rejecting any arbitrary execution attempts.
-- **Sliding-Window Correlation**: Aggregates incidents within a time window (e.g. 60 seconds) grouped by `target_username`, `source_ip`, or globally, firing an alert only when threshold counts are breached.
+- **Sliding-Window Correlation & State Updating**: Aggregates incidents within a sliding time window (e.g. 60 seconds) grouped by `target_username`, `source_ip`, or globally. When subsequent matching events arrive within the active window, the alert state is updated (`matched_count`, `last_event_time`, `matched_incident_ids_json`, `explanation`) rather than spawning duplicate alert storms.
 - **Idempotency Protection**: Deterministic SHA-256 hashing across `rule_id`, `group_key`, and the correlation window prevents duplicate alert creation for identical event sequences.
-- **One-Click Case Escalation**: Analysts can escalate any correlated alert into a formal incident response case with bidirectional linking and full audit tracking.
+- **Safe Rule Archival & Data Retention**: Detection rules support soft-deletion (`status = 'archived'`). Archived rules are excluded from live pipeline evaluation while preserving historical alerts, execution records, audit logs, and case linkages. Foreign key relationships enforce `ON DELETE RESTRICT` to guarantee audit trail integrity.
+- **One-Click Case Escalation**: Analysts can escalate any correlated alert into a formal incident response case with bidirectional linking, verified membership checks, cross-analyst ownership validation (403 Forbidden for unassigned analysts), duplicate escalation prevention (409 Conflict), and atomic audit logging.
 
 ---
 
@@ -186,7 +197,7 @@ AuthGuard-X features a database-backed detection rule engine and a sliding time-
 - **Traffic Protection**: `Flask-Limiter` (IP-based endpoint rate throttling)
 - **Frontend Architecture**: Modular Vanilla JavaScript (ES6+), design tokens (`tokens.css`), responsive layout (`layout.css`), accessible components (`components.css`), Chart.js
 - **Database Engine**: SQLite3 with strict foreign keys (`PRAGMA foreign_keys = ON`), indexed lookups, and idempotent migrations
-- **Automated QA**: Pytest suite (112 tests across 4 suites) and headless Chrome CDP browser automation (16 real assertions)
+- **Automated QA**: Pytest suite (116 tests across 4 suites) and headless Chrome CDP browser automation (24 real assertions)
 
 ---
 
@@ -256,18 +267,18 @@ Default development accounts:
 The project includes two comprehensive layers of automated verification:
 
 ```powershell
-# 1. Run the complete Pytest suite (112 tests)
+# 1. Run the complete Pytest suite (116 tests)
 pytest tests -v
 
-# 2. Run real-browser visual and functional verification (16 assertions + screenshots)
+# 2. Run real-browser visual and functional verification (24 assertions + screenshots)
 python scripts/capture_evidence.py
 ```
 
-### Test Suite Distribution (112 Tests Total)
+### Test Suite Distribution (116 Tests Total)
 - **Phase 1 Baseline** (`tests/test_auth_guard.py` — 15 tests): Health check, login validation, session state, unauthenticated access blocking, and persistence across restarts.
 - **Sprint 1 Professional UI & Hardening** (`tests/test_sprint1.py` — 54 tests): CSRF validation, simulation provenance enforcement, server-derived metrics, pagination envelopes, search/filter/sort allowlists, detail endpoints, and XSS resistance.
 - **Sprint 2 Advanced SOC Investigation & Security Corrections** (`tests/test_sprint2.py` — 29 tests): Idempotent database migrations, automatic case creation, 4-stage lifecycle state machine, reopening workflow with incrementing `reopen_count`, mandatory resolution summary, strict case ownership enforcement (Analyst A cannot resolve Analyst B's cases), auto-claim policy on unassigned cases, strengthened optimistic concurrency locking with strict boolean and malformed value rejection (`version` validation, 428 Precondition Required for missing, 400 for malformed/booleans, 409 for conflict), multi-client simultaneous race safety, URI scheme safety validation for evidence, administrative log purge protection with mandatory reason and persistent `system_audit_log`, personal queue isolation, single Investigate handler deduplication, and CSRF enforcement on case APIs.
-- **Sprint 3 Detection Engineering & Threat Correlation** (`tests/test_sprint3.py` — 14 tests): Default rule seeding with verified MITRE ATT&CK techniques, schema-constrained condition validation rejecting `eval()` and injection payloads, rule CRUD with RBAC enforcement and optimistic concurrency locking, sliding time-window threat correlation across IP and username grouping, SHA-256 idempotency hashing preventing duplicate alerts, alert escalation into formal cases with audit logging, alert closure, synthetic threat replay scenarios, and detection analytics.
+- **Sprint 3 Detection Engineering & Threat Correlation** (`tests/test_sprint3.py` — 18 tests): Default rule seeding with verified MITRE ATT&CK techniques, schema-constrained condition validation rejecting `eval()` and injection payloads, rule CRUD with RBAC enforcement and optimistic concurrency locking, sliding time-window threat correlation with state updating across IP and username grouping, SHA-256 idempotency hashing preventing duplicate alerts, safe rule archival retaining historical alerts, execution records, audit logs, and case linkages, cross-analyst alert escalation ownership validation (403 for unauthorized analysts, 409 for duplicate escalation), alert closure, synthetic threat replay scenarios, and real telemetry analytics.
 
 ---
 
