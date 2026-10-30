@@ -109,6 +109,8 @@ class CDPBrowser:
             "awaitPromise": True,
             "returnByValue": True
         })
+        if "exceptionDetails" in res:
+            raise RuntimeError(f"CDP JS Error: {res['exceptionDetails']}")
         return res.get("result", {}).get("value")
 
     def resize(self, width, height):
@@ -726,8 +728,134 @@ def run_full_verification():
 
         browser.screenshot("10_mobile_investigation_view.png")
 
+        # ── Assertion 16: Single Investigate Click Handler (No Duplicates) ────
+        print("\n[Assert 16] Verifying Single Investigate Click Handler & Navigation...")
+        browser.resize(1440, 900)
+        browser.evaluate("switchView('incidents');")
+        time.sleep(1)
+
+        single_click_result = browser.evaluate("""
+            (async () => {
+                // Ensure at least one unresolved incident exists
+                let btn = document.querySelector('#incidents-tbody .investigate-trigger');
+                if (!btn) {
+                    await window.API.incidents.simulate({
+                        attack: "Single Handler Verification Incident",
+                        risk: 75,
+                        behavior: "single_click_audit"
+                    });
+                    await window.Incidents.refresh();
+                    await new Promise(r => setTimeout(r, 600));
+                    btn = document.querySelector('#incidents-tbody .investigate-trigger');
+                }
+                if (!btn) {
+                    throw new Error("Unable to locate any .investigate-trigger button in #incidents-tbody");
+                }
+                const targetIncId = parseInt(btn.dataset.id, 10);
+                const hasObsoleteResolveClass = btn.classList.contains('resolve-trigger');
+
+                // Spy on Investigation.openCase
+                const originalOpenCase = window.Investigation.openCase;
+                const openCaseCalls = [];
+                window.Investigation.openCase = function(id) {
+                    openCaseCalls.push({ id: parseInt(id, 10), timestamp: Date.now() });
+                    return originalOpenCase.apply(this, arguments);
+                };
+
+                // Spy on UI.showToast
+                const originalShowToast = window.UI.showToast;
+                const toastCalls = [];
+                window.UI.showToast = function(msg, type) {
+                    toastCalls.push({ msg, type, timestamp: Date.now() });
+                    return originalShowToast.apply(this, arguments);
+                };
+
+                // Spy on API.cases.getCase
+                const originalGetCase = window.API.cases.getCase;
+                const apiCalls = [];
+                window.API.cases.getCase = function(id) {
+                    apiCalls.push({ id: parseInt(id, 10), timestamp: Date.now() });
+                    return originalGetCase.apply(this, arguments);
+                };
+
+                // Click the table Investigate button
+                btn.click();
+                await new Promise(r => setTimeout(r, 800));
+
+                const activePanelTable = document.querySelector('.view-panel.active');
+                const viewAfterTableClick = activePanelTable ? activePanelTable.id.replace('view-', '') : null;
+                const activeNavTable = document.querySelector('.sidebar-nav .nav-link.active');
+                const activeNavAfterTableClick = activeNavTable ? activeNavTable.dataset.view : null;
+
+                // Test modal as well
+                window.switchView('incidents');
+                await new Promise(r => setTimeout(r, 500));
+                await window.Incidents.openDetail(targetIncId);
+                await new Promise(r => setTimeout(r, 500));
+
+                const modalBtn = document.querySelector('#incident-modal .modal-investigate-btn');
+                const modalHasObsoleteClass = modalBtn ? modalBtn.classList.contains('modal-resolve-btn') : false;
+
+                const openCaseCallsBeforeModal = openCaseCalls.length;
+                const toastCallsBeforeModal = toastCalls.length;
+                const apiCallsBeforeModal = apiCalls.length;
+
+                modalBtn.click();
+                await new Promise(r => setTimeout(r, 800));
+
+                const activePanelModal = document.querySelector('.view-panel.active');
+                const viewAfterModalClick = activePanelModal ? activePanelModal.id.replace('view-', '') : null;
+                const openCaseCallsAfterModal = openCaseCalls.length - openCaseCallsBeforeModal;
+                const toastCallsAfterModal = toastCalls.length - toastCallsBeforeModal;
+                const apiCallsAfterModal = apiCalls.length - apiCallsBeforeModal;
+
+                // Restore spies
+                window.Investigation.openCase = originalOpenCase;
+                window.UI.showToast = originalShowToast;
+                window.API.cases.getCase = originalGetCase;
+
+                return {
+                    targetIncId,
+                    hasObsoleteResolveClass,
+                    modalHasObsoleteClass,
+                    tableClick: {
+                        openCaseCallsCount: openCaseCallsBeforeModal,
+                        calledWithId: openCaseCalls[0] ? openCaseCalls[0].id : null,
+                        view: viewAfterTableClick,
+                        nav: activeNavAfterTableClick,
+                        toastCallsCount: toastCallsBeforeModal,
+                        apiCallsCount: apiCallsBeforeModal
+                    },
+                    modalClick: {
+                        openCaseCallsCount: openCaseCallsAfterModal,
+                        calledWithId: openCaseCalls[1] ? openCaseCalls[1].id : null,
+                        view: viewAfterModalClick,
+                        toastCallsCount: toastCallsAfterModal,
+                        apiCallsCount: apiCallsAfterModal
+                    }
+                };
+            })()
+        """)
+        print(f"  Single Click Handler Execution: {single_click_result}")
+        assert not single_click_result["hasObsoleteResolveClass"], "Table button must not have obsolete resolve-trigger class"
+        assert not single_click_result["modalHasObsoleteClass"], "Modal button must not have obsolete modal-resolve-btn class"
+        assert single_click_result["tableClick"]["openCaseCallsCount"] == 1, "Table button click must invoke Investigation.openCase exactly once"
+        assert single_click_result["tableClick"]["calledWithId"] == single_click_result["targetIncId"], "Must be called with correct target incident ID"
+        assert single_click_result["tableClick"]["view"] == "investigation", "Active view must transition to 'investigation'"
+        assert single_click_result["tableClick"]["toastCallsCount"] == 0, "No duplicate toast notifications on direct table button click"
+        assert single_click_result["tableClick"]["apiCallsCount"] <= 1, "No duplicate API requests on table button click"
+
+        assert single_click_result["modalClick"]["openCaseCallsCount"] == 1, "Modal button click must invoke Investigation.openCase exactly once"
+        assert single_click_result["modalClick"]["calledWithId"] == single_click_result["targetIncId"], "Modal must be called with correct incident ID"
+        assert single_click_result["modalClick"]["view"] == "investigation", "Active view must transition to 'investigation'"
+        assert single_click_result["modalClick"]["toastCallsCount"] == 0, "No duplicate toast notifications on modal button click"
+        assert single_click_result["modalClick"]["apiCallsCount"] <= 1, "No duplicate API requests on modal button click"
+
+        passed_assertions += 1
+        print("  -> Passed: Exactly one Investigation.openCase call verified with zero duplicate handlers, toasts, or API requests.")
+
         print("\n========================================================")
-        print(f"ALL REAL-BROWSER ASSERTIONS PASSED ({passed_assertions}/15)")
+        print(f"ALL REAL-BROWSER ASSERTIONS PASSED ({passed_assertions}/16)")
         print("Updated evidence screenshots saved to docs/screenshots/")
         print("========================================================")
 

@@ -962,13 +962,14 @@ def test_optimistic_locking_missing_or_malformed_version_rejected(test_env):
     res4 = client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_john"})
     assert res4.status_code == 428
 
-    # 5. Malformed version (non-numeric, negative, or zero) -> 400 Bad Request
-    for bad_ver in ["not_a_number", -3, 0]:
+    # 5. Malformed version (booleans, non-numeric, negative, or zero) -> 400 Bad Request
+    malformed_versions = [True, False, 0, -1, -5, "not_a_number", "1.5", "1abc", "", "   ", 1.5]
+    for bad_ver in malformed_versions:
         res_bad = client.patch(f"/api/incidents/{inc_id}/case", json={
             "status": "investigating",
             "version": bad_ver
         })
-        assert res_bad.status_code == 400
+        assert res_bad.status_code == 400, f"Expected 400 for bad_ver={bad_ver!r}, got {res_bad.status_code}"
         assert res_bad.get_json()["error"] == "Bad Request"
 
     # 6. Legacy /resolve endpoint does NOT require version (backward compatibility)
@@ -978,6 +979,70 @@ def test_optimistic_locking_missing_or_malformed_version_rejected(test_env):
     })
     assert res_legacy.status_code == 200
     assert res_legacy.get_json()["case"]["status"] == "resolved"
+
+
+def test_strictly_validate_case_versions_across_all_endpoints(test_env):
+    """Explicitly verify rejection of booleans, zero, negatives, and malformed strings across all mutation endpoints."""
+    client, _, _ = test_env
+    client.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+    inc = _create_incident(client, attack="Strict Version Validation Inc", risk=80)
+    inc_id = inc["id"]
+
+    # Transition to investigating first with valid version
+    res_inv = client.patch(f"/api/incidents/{inc_id}/case", json={"status": "investigating", "version": 1})
+    assert res_inv.status_code == 200
+
+    malformed_values = [True, False, 0, -1, -10, "true", "false", "abc", "1.23", "", 2.71]
+
+    # Test assignment endpoint with malformed versions
+    for bad in malformed_values:
+        res = client.post(f"/api/incidents/{inc_id}/assign", json={"username": "analyst_john", "version": bad})
+        assert res.status_code == 400, f"Assign expected 400 for version={bad!r}, got {res.status_code}"
+        assert res.get_json()["error"] == "Bad Request"
+
+    # Test notes endpoint with malformed versions
+    for bad in malformed_values:
+        res = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Note text", "version": bad})
+        assert res.status_code == 400, f"Notes expected 400 for version={bad!r}, got {res.status_code}"
+        assert res.get_json()["error"] == "Bad Request"
+
+    # Test evidence endpoint with malformed versions
+    for bad in malformed_values:
+        res = client.post(f"/api/incidents/{inc_id}/evidence", json={
+            "title": "Ev Title",
+            "evidence_type": "log_excerpt",
+            "source_ref": "ref.log",
+            "version": bad
+        })
+        assert res.status_code == 400, f"Evidence expected 400 for version={bad!r}, got {res.status_code}"
+        assert res.get_json()["error"] == "Bad Request"
+
+    # Test lifecycle / resolution endpoint with malformed versions
+    for bad in malformed_values:
+        res = client.patch(f"/api/incidents/{inc_id}/case", json={
+            "status": "contained",
+            "version": bad
+        })
+        assert res.status_code == 400, f"Lifecycle expected 400 for version={bad!r}, got {res.status_code}"
+        assert res.get_json()["error"] == "Bad Request"
+
+    # Test legacy resolve endpoint with malformed version (if supplied, must be validated)
+    for bad in malformed_values:
+        res = client.post(f"/api/incidents/{inc_id}/resolve", json={
+            "summary": "Remediation note for malformed version test",
+            "version": bad
+        })
+        assert res.status_code == 400, f"Legacy resolve expected 400 for bad version={bad!r}, got {res.status_code}"
+
+    # Verify valid positive integer (version 2) succeeds on note
+    res_note = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Valid note with version", "version": 2})
+    assert res_note.status_code == 201
+
+    # Verify stale version returns 409 Conflict
+    res_stale = client.post(f"/api/incidents/{inc_id}/notes", json={"content": "Stale note version", "version": 2})
+    assert res_stale.status_code == 409
+    assert res_stale.get_json()["error"] == "Conflict"
+    assert res_stale.get_json()["current_version"] == 3
 
 
 def test_two_client_concurrent_updates_independent_connections(test_env):

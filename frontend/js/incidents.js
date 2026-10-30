@@ -105,7 +105,7 @@
 
       const actionBtn = inc.resolved
         ? `<span class="badge badge-subtle font-mono" style="font-size:var(--text-xs); color: var(--color-text-muted);">Resolved</span>`
-        : `<button class="btn btn-sm btn-primary investigate-trigger resolve-trigger" data-id="${inc.id}" title="Investigate in Workspace">Investigate</button>`;
+        : `<button class="btn btn-sm btn-primary investigate-trigger" data-id="${inc.id}" title="Investigate in Workspace">Investigate</button>`;
 
       tr.innerHTML = `
         <td class="cell-id">#${window.UI.escapeHTML(inc.id)}</td>
@@ -135,14 +135,6 @@
         if (window.Investigation && window.Investigation.openCase) {
           window.Investigation.openCase(id);
         }
-      });
-    });
-
-    tbody.querySelectorAll('.resolve-trigger').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.id;
-        handleResolve(id);
       });
     });
 
@@ -197,26 +189,21 @@
       setField('.detail-status', window.UI.renderStatusBadge(inc.resolved));
       setField('.detail-source', window.UI.renderSourceBadge(inc.is_simulated));
 
-      const resolveBtn = modal.querySelector('.modal-resolve-btn');
-      if (resolveBtn) {
-        if (inc.resolved) {
-          resolveBtn.style.display = 'none';
-        } else {
-          resolveBtn.style.display = 'inline-flex';
-          resolveBtn.textContent = 'Investigate & Resolve';
-          resolveBtn.onclick = () => {
-            window.UI.closeModal('incident-modal');
-            handleResolve(inc.id);
-          };
-        }
-      }
-
       const investigateModalBtn = modal.querySelector('.modal-investigate-btn');
       if (investigateModalBtn) {
-        investigateModalBtn.onclick = () => {
-          window.UI.closeModal('incident-modal');
-          handleResolve(inc.id);
-        };
+        if (inc.resolved) {
+          investigateModalBtn.style.display = 'none';
+          investigateModalBtn.onclick = null;
+        } else {
+          investigateModalBtn.style.display = 'inline-flex';
+          investigateModalBtn.textContent = 'Investigate in Workspace';
+          investigateModalBtn.onclick = () => {
+            window.UI.closeModal('incident-modal');
+            if (window.Investigation && typeof window.Investigation.openCase === 'function') {
+              window.Investigation.openCase(inc.id);
+            }
+          };
+        }
       }
 
       window.UI.openModal('incident-modal');
@@ -227,7 +214,6 @@
 
   function handleResolve(id) {
     // Preferred SOC workflow: Direct user into the Investigation Workspace to follow lifecycle and document summary
-    window.UI.showToast(`Opening Incident #${id} in Investigation Workspace to follow lifecycle and document resolution...`, 'info');
     if (window.Investigation && typeof window.Investigation.openCase === 'function') {
       window.Investigation.openCase(id);
     }

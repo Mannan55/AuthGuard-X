@@ -520,10 +520,19 @@
     if (!currentCaseId) return;
 
     try {
-      const payload = { status: targetStatus };
-      if (currentCaseData && currentCaseData.case && currentCaseData.case.version) {
-        payload.version = currentCaseData.case.version;
+      let caseVersion = currentCaseData && currentCaseData.case && currentCaseData.case.version !== undefined ? currentCaseData.case.version : null;
+      if (caseVersion === null) {
+        const freshCase = await window.API.cases.getCase(currentCaseId);
+        if (freshCase && freshCase.case && freshCase.case.version !== undefined) {
+          caseVersion = freshCase.case.version;
+        }
       }
+      if (caseVersion === null) {
+        window.UI.showToast('Unable to determine case version. Please reload the investigation.', 'error');
+        return;
+      }
+
+      const payload = { status: targetStatus, version: caseVersion };
       if (resolutionSummary) payload.resolution_summary = resolutionSummary;
       if (reopenReason) payload.reopen_reason = reopenReason;
 
@@ -549,10 +558,19 @@
     if (!currentCaseId) return;
 
     try {
-      const payload = targetUserId ? { assigned_to: parseInt(targetUserId, 10) } : { unassign: true };
-      if (currentCaseData && currentCaseData.case && currentCaseData.case.version) {
-        payload.version = currentCaseData.case.version;
+      let caseVersion = currentCaseData && currentCaseData.case && currentCaseData.case.version !== undefined ? currentCaseData.case.version : null;
+      if (caseVersion === null) {
+        const freshCase = await window.API.cases.getCase(currentCaseId);
+        if (freshCase && freshCase.case && freshCase.case.version !== undefined) {
+          caseVersion = freshCase.case.version;
+        }
       }
+      if (caseVersion === null) {
+        window.UI.showToast('Unable to determine case version for assignment. Please reload the investigation.', 'error');
+        return;
+      }
+
+      const payload = targetUserId ? { assigned_to: parseInt(targetUserId, 10), version: caseVersion } : { unassign: true, version: caseVersion };
       await window.API.cases.assign(currentCaseId, payload);
       if (targetUserId) {
         window.UI.showToast(`Case #${currentCaseId} assigned successfully`, 'success');
@@ -716,7 +734,18 @@
 
         try {
           noteSubmitBtn.disabled = true;
-          const caseVer = currentCaseData && currentCaseData.case ? currentCaseData.case.version : 1;
+          let caseVer = currentCaseData && currentCaseData.case && currentCaseData.case.version !== undefined ? currentCaseData.case.version : null;
+          if (caseVer === null) {
+            const freshCase = await window.API.cases.getCase(currentCaseId);
+            if (freshCase && freshCase.case && freshCase.case.version !== undefined) {
+              caseVer = freshCase.case.version;
+            }
+          }
+          if (caseVer === null) {
+            window.UI.showToast('Unable to determine case version for note submission. Please reload the case.', 'error');
+            noteSubmitBtn.disabled = false;
+            return;
+          }
           await window.API.cases.addNote(currentCaseId, { content, version: caseVer });
           noteInput.value = '';
           window.UI.showToast('Investigation note saved', 'success');
@@ -755,7 +784,18 @@
 
         try {
           evSubmitBtn.disabled = true;
-          const caseVer = currentCaseData && currentCaseData.case ? currentCaseData.case.version : 1;
+          let caseVer = currentCaseData && currentCaseData.case && currentCaseData.case.version !== undefined ? currentCaseData.case.version : null;
+          if (caseVer === null) {
+            const freshCase = await window.API.cases.getCase(currentCaseId);
+            if (freshCase && freshCase.case && freshCase.case.version !== undefined) {
+              caseVer = freshCase.case.version;
+            }
+          }
+          if (caseVer === null) {
+            window.UI.showToast('Unable to determine case version for evidence attachment. Please reload the case.', 'error');
+            evSubmitBtn.disabled = false;
+            return;
+          }
           await window.API.cases.addEvidence(currentCaseId, {
             title,
             evidence_type,
@@ -795,10 +835,10 @@
   function getCurrentCaseVersion(id) {
     if (currentCaseData && currentCaseData.case) {
       if (!id || currentCaseData.case.incident_id === parseInt(id, 10)) {
-        return currentCaseData.case.version || 1;
+        return currentCaseData.case.version !== undefined ? currentCaseData.case.version : null;
       }
     }
-    return 1;
+    return null;
   }
 
   // ── 5. Public API ───────────────────────────────────────────────────────

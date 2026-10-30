@@ -185,14 +185,31 @@
       async getCase(id) {
         return apiFetch(`/api/incidents/${id}/case`);
       },
+      async _resolveCaseVersion(id, explicitVersion) {
+        if (explicitVersion !== undefined && explicitVersion !== null) {
+          return explicitVersion;
+        }
+        if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
+          const v = window.Investigation.getCurrentCaseVersion(id);
+          if (v !== undefined && v !== null) {
+            return v;
+          }
+        }
+        // Fetch actual case version from server before mutation rather than inventing fallbacks
+        try {
+          const caseData = await apiFetch(`/api/incidents/${id}/case`);
+          if (caseData && caseData.case && caseData.case.version !== undefined && caseData.case.version !== null) {
+            return caseData.case.version;
+          }
+        } catch (e) {
+          // Fall through to error
+        }
+        throw new Error(`Unable to determine case version for incident #${id}. Please reload the case.`);
+      },
       async updateStatus(id, payload) {
         const body = typeof payload === 'object' ? { ...payload } : { status: payload };
-        if (body.version === undefined) {
-          if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
-            body.version = window.Investigation.getCurrentCaseVersion(id);
-          } else {
-            body.version = 1;
-          }
+        if (body.version === undefined || body.version === null) {
+          body.version = await this._resolveCaseVersion(id, undefined);
         }
         return apiFetch(`/api/incidents/${id}/case`, {
           method: 'PATCH',
@@ -201,12 +218,8 @@
       },
       async assign(id, payload) {
         const body = typeof payload === 'object' ? { ...payload } : {};
-        if (body.version === undefined) {
-          if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
-            body.version = window.Investigation.getCurrentCaseVersion(id);
-          } else {
-            body.version = 1;
-          }
+        if (body.version === undefined || body.version === null) {
+          body.version = await this._resolveCaseVersion(id, undefined);
         }
         return apiFetch(`/api/incidents/${id}/assign`, {
           method: 'POST',
@@ -218,14 +231,8 @@
       },
       async addNote(id, payload, version = null) {
         const body = typeof payload === 'object' ? { ...payload } : { content: payload };
-        if (body.version === undefined) {
-          if (version !== null && version !== undefined) {
-            body.version = version;
-          } else if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
-            body.version = window.Investigation.getCurrentCaseVersion(id);
-          } else {
-            body.version = 1;
-          }
+        if (body.version === undefined || body.version === null) {
+          body.version = await this._resolveCaseVersion(id, version);
         }
         return apiFetch(`/api/incidents/${id}/notes`, {
           method: 'POST',
@@ -237,14 +244,8 @@
       },
       async addEvidence(id, payload, version = null) {
         const body = typeof payload === 'object' ? { ...payload } : {};
-        if (body.version === undefined) {
-          if (version !== null && version !== undefined) {
-            body.version = version;
-          } else if (window.Investigation && typeof window.Investigation.getCurrentCaseVersion === 'function') {
-            body.version = window.Investigation.getCurrentCaseVersion(id);
-          } else {
-            body.version = 1;
-          }
+        if (body.version === undefined || body.version === null) {
+          body.version = await this._resolveCaseVersion(id, version);
         }
         return apiFetch(`/api/incidents/${id}/evidence`, {
           method: 'POST',

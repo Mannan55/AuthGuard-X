@@ -938,6 +938,68 @@ def create_app(test_config=None) -> Flask:
         "resolved": {"investigating"},  # Controlled reopening
     }
 
+    def _validate_case_version(raw_version, require_version: bool = True, operation_desc: str = "this operation"):
+        """Strictly validates case version for optimistic concurrency control.
+        Rules:
+          - If raw_version is None:
+              - If require_version is True: returns HTTP 428 Precondition Required
+              - If require_version is False: returns (None, None)
+          - If raw_version is a boolean (True / False): returns HTTP 400 Bad Request
+          - If raw_version is a float: returns HTTP 400 Bad Request
+          - If raw_version is an int:
+              - If raw_version <= 0: returns HTTP 400 Bad Request
+              - Returns (raw_version, None)
+          - If raw_version is a str:
+              - Must be only decimal digits and > 0, otherwise HTTP 400 Bad Request
+          - Any other type: HTTP 400 Bad Request
+        """
+        if raw_version is None:
+            if require_version:
+                return None, (jsonify({
+                    "error": "Precondition Required",
+                    "message": f"Missing 'version' parameter. {operation_desc.capitalize()} requires an expected case version for optimistic concurrency control."
+                }), 428)
+            return None, None
+
+        # Python booleans are instances of int; explicitly reject them first
+        if isinstance(raw_version, bool):
+            return None, (jsonify({
+                "error": "Bad Request",
+                "message": "Malformed 'version' parameter. Booleans (true/false) are rejected."
+            }), 400)
+
+        # Reject floats
+        if isinstance(raw_version, float):
+            return None, (jsonify({
+                "error": "Bad Request",
+                "message": "Malformed 'version' parameter. Version must be a positive integer, not a float."
+            }), 400)
+
+        # Handle ints
+        if isinstance(raw_version, int):
+            if raw_version <= 0:
+                return None, (jsonify({
+                    "error": "Bad Request",
+                    "message": "Malformed 'version' parameter. Version must be a positive integer greater than zero."
+                }), 400)
+            return raw_version, None
+
+        # Handle strings strictly
+        if isinstance(raw_version, str):
+            cleaned = raw_version.strip()
+            if not cleaned.isdigit() or int(cleaned) <= 0:
+                return None, (jsonify({
+                    "error": "Bad Request",
+                    "message": "Malformed 'version' parameter. Version must be a positive integer."
+                }), 400)
+            return int(cleaned), None
+
+        # Any other type
+        return None, (jsonify({
+            "error": "Bad Request",
+            "message": "Malformed 'version' parameter. Version must be a positive integer."
+        }), 400)
+
     def _ensure_case_row(c, incident_id: int):
         """Ensures a case row exists for an incident, creating one idempotently if missing.
         Preserves historical resolution times as NULL (unknown) rather than setting to creation time.
@@ -1015,44 +1077,21 @@ def create_app(test_config=None) -> Flask:
         summary = summary.strip()[:2000]
 
         # 4. Concurrency safety (Optimistic locking)
-        if require_version:
-            if expected_version is None:
-                return jsonify({
-                    "error": "Precondition Required",
-                    "message": "Missing 'version' parameter. Modern case resolution requires an expected case version for optimistic concurrency control."
-                }), 428
-            try:
-                expected_version = int(expected_version)
-                if expected_version <= 0:
-                    raise ValueError()
-            except (ValueError, TypeError):
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "Malformed 'version' parameter. Version must be a positive integer."
-                }), 400
+        parsed_version, err_resp = _validate_case_version(
+            expected_version,
+            require_version=require_version,
+            operation_desc="case resolution"
+        )
+        if err_resp:
+            return err_resp
 
-            if expected_version != current_version:
-                return jsonify({
-                    "error": "Conflict",
-                    "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}. Please reload latest state and retry.",
-                    "current_version": current_version
-                }), 409
-        elif expected_version is not None:
-            try:
-                expected_version = int(expected_version)
-                if expected_version <= 0:
-                    raise ValueError()
-                if expected_version != current_version:
-                    return jsonify({
-                        "error": "Conflict",
-                        "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_version}. Please reload latest state and retry.",
-                        "current_version": current_version
-                    }), 409
-            except (ValueError, TypeError):
-                return jsonify({
-                    "error": "Bad Request",
-                    "message": "Malformed 'version' parameter. Version must be a positive integer."
-                }), 400
+        if parsed_version is not None and parsed_version != current_version:
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Concurrent modification detected. Expected version {parsed_version}, but case is at version {current_version}. Please reload latest state and retry.",
+                "current_version": current_version
+            }), 409
+        expected_version = parsed_version
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1325,23 +1364,14 @@ def create_app(test_config=None) -> Flask:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Concurrency safety: optimistic locking check for modern case mutations
-        expected_version = data.get("version")
-        if expected_version is None:
+        expected_version, err_resp = _validate_case_version(
+            data.get("version"),
+            require_version=True,
+            operation_desc="updating case status"
+        )
+        if err_resp:
             conn.close()
-            return jsonify({
-                "error": "Precondition Required",
-                "message": "Missing 'version' parameter. Modern case mutations require an expected case version for optimistic concurrency control."
-            }), 428
-        try:
-            expected_version = int(expected_version)
-            if expected_version <= 0:
-                raise ValueError()
-        except (ValueError, TypeError):
-            conn.close()
-            return jsonify({
-                "error": "Bad Request",
-                "message": "Malformed 'version' parameter. Version must be a positive integer."
-            }), 400
+            return err_resp
 
         current_version = case_row["version"]
         if expected_version != current_version:
@@ -1512,23 +1542,14 @@ def create_app(test_config=None) -> Flask:
         caller_name = session.get("username", "analyst")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        expected_version = data.get("version")
-        if expected_version is None:
+        expected_version, err_resp = _validate_case_version(
+            data.get("version"),
+            require_version=True,
+            operation_desc="modifying case assignment"
+        )
+        if err_resp:
             conn.close()
-            return jsonify({
-                "error": "Precondition Required",
-                "message": "Missing 'version' parameter. Modern case assignment requires an expected case version for optimistic concurrency control."
-            }), 428
-        try:
-            expected_version = int(expected_version)
-            if expected_version <= 0:
-                raise ValueError()
-        except (ValueError, TypeError):
-            conn.close()
-            return jsonify({
-                "error": "Bad Request",
-                "message": "Malformed 'version' parameter. Version must be a positive integer."
-            }), 400
+            return err_resp
 
         current_version = case_row["version"]
         if expected_version != current_version:
@@ -1687,23 +1708,14 @@ def create_app(test_config=None) -> Flask:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Concurrency safety: optimistic locking check for modern case mutations
-        expected_version = data.get("version")
-        if expected_version is None:
+        expected_version, err_resp = _validate_case_version(
+            data.get("version"),
+            require_version=True,
+            operation_desc="adding case notes"
+        )
+        if err_resp:
             conn.close()
-            return jsonify({
-                "error": "Precondition Required",
-                "message": "Missing 'version' parameter. Adding case notes requires an expected case version for optimistic concurrency control."
-            }), 428
-        try:
-            expected_version = int(expected_version)
-            if expected_version <= 0:
-                raise ValueError()
-        except (ValueError, TypeError):
-            conn.close()
-            return jsonify({
-                "error": "Bad Request",
-                "message": "Malformed 'version' parameter. Version must be a positive integer."
-            }), 400
+            return err_resp
 
         current_version = case_row["version"]
         if expected_version != current_version:
@@ -1872,23 +1884,14 @@ def create_app(test_config=None) -> Flask:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Concurrency safety: optimistic locking check for modern case mutations
-        expected_version = data.get("version")
-        if expected_version is None:
+        expected_version, err_resp = _validate_case_version(
+            data.get("version"),
+            require_version=True,
+            operation_desc="attaching case evidence"
+        )
+        if err_resp:
             conn.close()
-            return jsonify({
-                "error": "Precondition Required",
-                "message": "Missing 'version' parameter. Attaching case evidence requires an expected case version for optimistic concurrency control."
-            }), 428
-        try:
-            expected_version = int(expected_version)
-            if expected_version <= 0:
-                raise ValueError()
-        except (ValueError, TypeError):
-            conn.close()
-            return jsonify({
-                "error": "Bad Request",
-                "message": "Malformed 'version' parameter. Version must be a positive integer."
-            }), 400
+            return err_resp
 
         current_version = case_row["version"]
         if expected_version != current_version:

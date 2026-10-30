@@ -976,7 +976,7 @@
 
       <div class="modal-footer">
         <button class="btn btn-secondary" data-dismiss="modal">Close</button>
-        <button class="btn btn-primary modal-investigate-btn modal-resolve-btn">Investigate in Workspace</button>
+        <button class="btn btn-primary modal-investigate-btn">Investigate in Workspace</button>
       </div>
     </div>
   </div>
@@ -1091,6 +1091,9 @@
 
       if (baseView === 'my-queue' && window.Investigation && window.Investigation.loadWorkQueue) {
         window.Investigation.loadWorkQueue();
+      }
+      if (baseView === 'incidents' && window.Incidents && typeof window.Incidents.refresh === 'function') {
+        window.Incidents.refresh();
       }
     }
 
