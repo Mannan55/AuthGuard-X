@@ -18,11 +18,6 @@ AuthGuard-X is an interactive Security Operations Center (SOC) demonstration and
 | ![Login View](docs/screenshots/01_login_view.png) | ![Dashboard Overview](docs/screenshots/02_dashboard_overview.png) |
 | *Session-based login with dev credential guidance* | *Real-time metrics, simulation vectors & timeline* |
 
-| 3. High-Contrast Terminal Mode ("Hacker Mode") | 4. Incident Remediation & Resolution |
-|:---:|:---:|
-| ![Hacker Mode](docs/screenshots/03_hacker_mode.png) | ![Incident Resolved](docs/screenshots/04_incident_resolved.png) |
-| *Monochrome CRT-style SOC theme toggle* | *Audited incident mitigation workflow* |
-
 ---
 
 ## Cybersecurity & SOC Use Cases
