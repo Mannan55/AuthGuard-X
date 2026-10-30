@@ -310,9 +310,9 @@ def create_app(test_config=None) -> Flask:
     if test_config:
         app.config.update(test_config)
 
-    # Automatically disable CSRF when running under pytest / TESTING flag so
-    # the existing test suite keeps passing without requiring token plumbing.
-    if app.config.get("TESTING"):
+    # Automatically disable CSRF when running under pytest / TESTING flag unless
+    # explicitly enabled in test_config (allowing CSRF integration tests).
+    if app.config.get("TESTING") and "WTF_CSRF_ENABLED" not in (test_config or {}):
         app.config["WTF_CSRF_ENABLED"] = False
 
     # Initialize CSRF protection (Flask-WTF)
@@ -333,6 +333,7 @@ def create_app(test_config=None) -> Flask:
         default_limits=[],
         storage_uri="memory://"
     )
+    app.limiter = limiter
 
     # Initialize Database
     init_db(

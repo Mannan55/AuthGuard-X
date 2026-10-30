@@ -77,6 +77,13 @@
     modal.classList.remove('open');
     modal.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('modal-open');
+
+    // Trigger confirmation hook if active
+    if (modalId === 'confirm-modal' && typeof modal._settleConfirm === 'function') {
+      const fn = modal._settleConfirm;
+      modal._settleConfirm = null;
+      fn(false);
+    }
   }
 
   function initModals() {
@@ -115,10 +122,14 @@
         return;
       }
 
+      const previousFocused = document.activeElement;
+      let settled = false;
+
       const titleEl = modal.querySelector('.confirm-title');
       const msgEl = modal.querySelector('.confirm-message');
       const confirmBtn = modal.querySelector('.confirm-btn');
       const cancelBtn = modal.querySelector('.cancel-btn');
+      const closeBtn = modal.querySelector('.modal-close-btn');
 
       if (titleEl) titleEl.textContent = title;
       if (msgEl) msgEl.textContent = message;
@@ -128,27 +139,52 @@
       }
       if (cancelBtn) cancelBtn.textContent = cancelText;
 
-      const handleConfirm = () => {
+      function settle(val) {
+        if (settled) return;
+        settled = true;
+        modal._settleConfirm = null;
         cleanup();
         closeModal('confirm-modal');
-        resolve(true);
-      };
+        if (previousFocused && typeof previousFocused.focus === 'function') {
+          try { previousFocused.focus(); } catch (err) {}
+        }
+        resolve(Boolean(val));
+      }
 
-      const handleCancel = () => {
-        cleanup();
-        closeModal('confirm-modal');
-        resolve(false);
-      };
+      function onConfirm(e) {
+        e.preventDefault();
+        settle(true);
+      }
 
-      const cleanup = () => {
-        confirmBtn.removeEventListener('click', handleConfirm);
-        cancelBtn.removeEventListener('click', handleCancel);
-      };
+      function onCancel(e) {
+        e.preventDefault();
+        settle(false);
+      }
 
-      confirmBtn.addEventListener('click', handleConfirm);
-      cancelBtn.addEventListener('click', handleCancel);
+      function onKeydown(e) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          settle(false);
+        }
+      }
+
+      function cleanup() {
+        if (confirmBtn) confirmBtn.removeEventListener('click', onConfirm);
+        if (cancelBtn) cancelBtn.removeEventListener('click', onCancel);
+        if (closeBtn) closeBtn.removeEventListener('click', onCancel);
+        document.removeEventListener('keydown', onKeydown, true);
+      }
+
+      // Register hook for backdrop clicks & generic dismiss
+      modal._settleConfirm = settle;
+
+      if (confirmBtn) confirmBtn.addEventListener('click', onConfirm);
+      if (cancelBtn) cancelBtn.addEventListener('click', onCancel);
+      if (closeBtn) closeBtn.addEventListener('click', onCancel);
+      document.addEventListener('keydown', onKeydown, true);
 
       openModal('confirm-modal');
+      if (cancelBtn) cancelBtn.focus();
     });
   }
 
@@ -224,9 +260,9 @@
 
   function renderSourceBadge(isSimulated) {
     if (isSimulated) {
-      return `<span class="badge badge-simulated" title="Simulated training telemetry">Simulated</span>`;
+      return `<span class="badge badge-simulated" title="Simulated training telemetry (is_simulated = 1)">Simulated</span>`;
     }
-    return `<span class="badge badge-telemetry" title="Operational log telemetry">Telemetry</span>`;
+    return `<span class="badge badge-telemetry" title="Internal system / audit log event (is_simulated = 0)">System Event</span>`;
   }
 
   // ── Date Formatting ─────────────────────────────────────────────────

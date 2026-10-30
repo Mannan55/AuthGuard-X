@@ -30,8 +30,8 @@
     if (openEl) window.UI.numberTick(openEl, metrics.open_incidents || 0);
     if (criticalEl) window.UI.numberTick(criticalEl, metrics.critical_count || 0);
     if (healthEl) {
-      window.UI.numberTick(healthEl, metrics.health_score || 100);
-      const score = metrics.health_score || 100;
+      const score = typeof metrics.health_score === 'number' ? metrics.health_score : (metrics.health_score ?? 100);
+      window.UI.numberTick(healthEl, score);
       if (score >= 80) healthEl.style.color = 'var(--color-success)';
       else if (score >= 50) healthEl.style.color = 'var(--color-warning)';
       else healthEl.style.color = 'var(--color-critical)';
@@ -235,11 +235,29 @@
         triggerSimulation(attack, risk, behavior);
       });
     });
+
+    const customSubmitBtn = document.getElementById('custom-sim-submit-btn');
+    if (customSubmitBtn) {
+      customSubmitBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const attackEl = document.getElementById('custom-sim-attack');
+        const riskEl = document.getElementById('custom-sim-risk');
+        const behaviorEl = document.getElementById('custom-sim-behavior');
+        const cityEl = document.getElementById('custom-sim-city');
+
+        const attack = (attackEl && attackEl.value.trim()) || 'Custom Adversary Simulation';
+        const risk = parseInt(riskEl ? riskEl.value : 75, 10) || 75;
+        const behavior = behaviorEl ? behaviorEl.value : 'custom_vector';
+        const city = cityEl ? cityEl.value : 'Zurich, Switzerland';
+        triggerSimulation(attack, risk, behavior, city);
+      });
+    }
   }
 
   window.Dashboard = {
     init,
     loadMetrics,
+    renderKPIs,
     updateTimeline,
     replayTimeline,
     triggerSimulation

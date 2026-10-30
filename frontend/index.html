@@ -209,9 +209,9 @@
               </div>
               <div id="metric-total" class="metric-value">0</div>
               <div class="metric-footer text-muted">
-                <span>Sim: <b id="metric-sim-count">0</b></span>
+                <span>Simulated: <b id="metric-sim-count">0</b></span>
                 <span class="separator">•</span>
-                <span>Live: <b id="metric-tele-count">0</b></span>
+                <span>System / Audit: <b id="metric-tele-count">0</b></span>
               </div>
             </div>
 
@@ -298,17 +298,17 @@
               </p>
               <div class="sim-actions-grid">
                 <button class="btn btn-secondary btn-block" data-simulate data-attack="Brute Force Credential Spray" data-risk="85" data-behavior="high_velocity_login">
-                  <span>⚡ Simulate Brute Force</span>
+                  <span>Simulate Brute Force</span>
                   <span class="badge badge-critical">Risk 85</span>
                 </button>
 
                 <button class="btn btn-secondary btn-block" data-simulate data-attack="Credential Stuffing Bot" data-risk="65" data-behavior="automated_stuffing">
-                  <span>🤖 Simulate Bot Stuffing</span>
+                  <span>Simulate Bot Stuffing</span>
                   <span class="badge badge-high">Risk 65</span>
                 </button>
 
                 <button class="btn btn-secondary btn-block" data-simulate data-attack="Anomalous Geolocation Travel" data-risk="35" data-behavior="geographic_velocity">
-                  <span>🌐 Simulate Geo Anomaly</span>
+                  <span>Simulate Geo Anomaly</span>
                   <span class="badge badge-low">Risk 35</span>
                 </button>
               </div>
@@ -368,8 +368,8 @@
 
                 <select id="filter-source" class="form-select" aria-label="Filter by source">
                   <option value="all">All Sources</option>
-                  <option value="simulated">Simulated Data</option>
-                  <option value="telemetry">Operational Telemetry</option>
+                  <option value="simulated">Simulated Events</option>
+                  <option value="telemetry">System / Audit Events</option>
                 </select>
               </div>
             </div>
@@ -380,7 +380,7 @@
                 <thead>
                   <tr>
                     <th data-sort="id" class="sortable">ID <span class="sort-indicator"></span></th>
-                    <th>Source</th>
+                    <th>Provenance</th>
                     <th data-sort="username" class="sortable">Target User <span class="sort-indicator"></span></th>
                     <th data-sort="attack" class="sortable">Attack Vector <span class="sort-indicator"></span></th>
                     <th>Location</th>
@@ -424,13 +424,165 @@
 
 
         <!-- ===================================================================
+             VIEW: SIMULATIONS (CYBER ATTACK SIMULATION LAB)
+             =================================================================== -->
+        <section id="view-simulations" class="view-panel">
+          
+          <!-- Simulation Header Card -->
+          <div class="card" style="margin-bottom: var(--space-4);">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">Cyber Attack Simulation Lab</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Controlled adversary emulation for SOC detection rule evaluation and analyst triage training</span>
+              </div>
+              <span class="badge badge-simulated">Simulated Telemetry Pipeline</span>
+            </div>
+            <p class="text-muted" style="font-size: var(--text-sm); line-height: var(--leading-relaxed);">
+              Simulate adversary vectors to validate SOC ingestion pipelines, threshold triggers, and real-time response workflows. 
+              All simulated events are cryptographically isolated with <code>is_simulated = 1</code> and will not contaminate operational telemetry.
+            </p>
+          </div>
+
+          <!-- Simulation Scenarios Grid -->
+          <div class="grid-2-col" style="gap: var(--space-4); margin-bottom: var(--space-4);">
+            
+            <!-- Pre-configured Attack Vectors -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Adversary Vector Library</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">One-click execution</span>
+              </div>
+              <div class="sim-vector-list" style="display: flex; flex-direction: column; gap: var(--space-3);">
+                
+                <div class="card" style="background: var(--color-surface); padding: var(--space-3); border: 1px solid var(--color-border);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
+                    <div>
+                      <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Brute Force Credential Spray</strong>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Technique: T1110.003 • Distributed Authentication Spray</div>
+                    </div>
+                    <span class="badge badge-critical">Critical (85)</span>
+                  </div>
+                  <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
+                    Fires a burst of rapid authentication attempts using common dictionary passwords against administrative accounts.
+                  </p>
+                  <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Brute Force Credential Spray" data-risk="85" data-behavior="high_velocity_login">
+                    Launch Attack Simulation
+                  </button>
+                </div>
+
+                <div class="card" style="background: var(--color-surface); padding: var(--space-3); border: 1px solid var(--color-border);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
+                    <div>
+                      <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Credential Stuffing Botnet</strong>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Technique: T1110.004 • Automated Bot Spray</div>
+                    </div>
+                    <span class="badge badge-high">High (65)</span>
+                  </div>
+                  <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
+                    Emulates automated bot traffic cycling credentials leaked from external breaches against application users.
+                  </p>
+                  <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Credential Stuffing Bot" data-risk="65" data-behavior="automated_stuffing">
+                    Launch Attack Simulation
+                  </button>
+                </div>
+
+                <div class="card" style="background: var(--color-surface); padding: var(--space-3); border: 1px solid var(--color-border);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
+                    <div>
+                      <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">Anomalous Geolocation Velocity</strong>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Technique: T1078 • Geographic Impossibility</div>
+                    </div>
+                    <span class="badge badge-low">Low (35)</span>
+                  </div>
+                  <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
+                    Generates session activity from geographically distant locations (e.g. Tokyo to London) within an impossible travel timeframe.
+                  </p>
+                  <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="Anomalous Geolocation Travel" data-risk="35" data-behavior="geographic_velocity">
+                    Launch Attack Simulation
+                  </button>
+                </div>
+
+                <div class="card" style="background: var(--color-surface); padding: var(--space-3); border: 1px solid var(--color-border);">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: var(--space-2);">
+                    <div>
+                      <strong style="color: var(--color-text-primary); font-size: var(--text-sm);">SQL Injection Exploit Probe</strong>
+                      <div class="text-muted" style="font-size: var(--text-xs);">Technique: T1190 • Exploit Public-Facing Application</div>
+                    </div>
+                    <span class="badge badge-critical">Critical (90)</span>
+                  </div>
+                  <p class="text-muted" style="font-size: var(--text-xs); margin-bottom: var(--space-2);">
+                    Injects automated database probe syntax into input parameters to test input sanitization and parameterized query guards.
+                  </p>
+                  <button class="btn btn-secondary btn-sm btn-block" data-simulate data-attack="SQL Injection Exploit Probe" data-risk="90" data-behavior="sqli_probe">
+                    Launch Attack Simulation
+                  </button>
+                </div>
+
+              </div>
+            </div>
+
+            <!-- Custom Vector Formulation -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Custom Adversary Scenario</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Parameter customization</span>
+              </div>
+              <p class="text-muted" style="font-size: var(--text-sm); margin-bottom: var(--space-4);">
+                Configure custom parameters to test specific detection rules, threshold alerting, and incident triage runbooks.
+              </p>
+              
+              <form id="custom-simulation-form" class="form-stacked">
+                <div class="form-group">
+                  <label for="custom-sim-attack" class="form-label">Attack Vector Title</label>
+                  <input id="custom-sim-attack" type="text" class="form-input" placeholder="e.g. Session Hijack via Stolen Cookie" value="Privilege Escalation Probe">
+                </div>
+
+                <div class="form-group">
+                  <label for="custom-sim-risk" class="form-label">Risk Severity (0–100)</label>
+                  <input id="custom-sim-risk" type="number" class="form-input" min="0" max="100" value="75">
+                  <small class="text-muted" style="font-size: var(--text-xs);">Scores &ge; 80 trigger Critical alerts and lower system health.</small>
+                </div>
+
+                <div class="form-group">
+                  <label for="custom-sim-behavior" class="form-label">Behavior Profile</label>
+                  <select id="custom-sim-behavior" class="form-select">
+                    <option value="privilege_escalation">Privilege Escalation Attempt</option>
+                    <option value="lateral_traversal">Lateral Network Traversal</option>
+                    <option value="api_rate_exhaustion">API Rate Limiter Flooding</option>
+                    <option value="session_anomaly">Session Token Manipulation</option>
+                    <option value="data_exfiltration">Simulated Bulk Data Exfiltration</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label for="custom-sim-city" class="form-label">Simulated Origin City</label>
+                  <select id="custom-sim-city" class="form-select">
+                    <option value="Zurich, Switzerland">Zurich, Switzerland</option>
+                    <option value="Seoul, South Korea">Seoul, South Korea</option>
+                    <option value="Frankfurt, Germany">Frankfurt, Germany</option>
+                    <option value="Toronto, Canada">Toronto, Canada</option>
+                    <option value="Sydney, Australia">Sydney, Australia</option>
+                  </select>
+                </div>
+
+                <button id="custom-sim-submit-btn" type="button" class="btn btn-primary btn-block" style="margin-top: var(--space-3);">
+                  Inject Custom Adversary Vector
+                </button>
+              </form>
+            </div>
+
+          </div>
+        </section>
+
+
+        <!-- ===================================================================
              VIEW: THREAT MAP
              =================================================================== -->
         <section id="view-threat-map" class="view-panel">
           <div class="card">
             <div class="card-header">
               <div>
-                <h3 class="card-title">Global Telemetry Vectors</h3>
+                <h3 class="card-title">Global Threat Origin Vectors</h3>
                 <span class="text-muted" style="font-size: var(--text-xs);">Simulated geospatial threat origin mapping</span>
               </div>
               <span class="badge badge-simulated">Simulated Data Only</span>
@@ -438,7 +590,7 @@
 
             <div id="attack-map-canvas" class="attack-map-wrapper">
               <img src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg" alt="World Map Vector" class="world-map-svg">
-              <div class="map-disclaimer-pill">Simulated Map Coordinates • Not Live GPS Feeds</div>
+              <div class="map-disclaimer-pill">Simulated Coordinate Projections • No External Geotracking</div>
             </div>
           </div>
         </section>
@@ -480,7 +632,7 @@
             <div class="detail-status">—</div>
           </div>
           <div class="detail-item">
-            <span class="detail-label">Telemetry Source</span>
+            <span class="detail-label">Incident Provenance</span>
             <div class="detail-source">—</div>
           </div>
           <div class="detail-item">

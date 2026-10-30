@@ -10,6 +10,7 @@ Covers all Phase 1 tests PLUS new Sprint 1 features:
 """
 import os
 import sys
+import tempfile
 import pytest
 from pathlib import Path
 
@@ -256,8 +257,41 @@ def test_ip_helpers():
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-# CSRF Token Endpoint
+# CSRF Token Endpoint & Enforcement
 # ---------------------------------------------------------------------------
+
+@pytest.fixture
+def csrf_client():
+    """
+    Test environment with WTF_CSRF_ENABLED explicitly set to True.
+    Allows testing missing, invalid, and valid CSRF token scenarios.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    test_app = create_app({
+        "TESTING": True,
+        "DATABASE_PATH": db_path,
+        "SECRET_KEY": "test-csrf-enforced-secret-key-32b",
+        "AUTHGUARD_ENV": "development",
+        "DEMO_MODE": True,
+        "SEED_DEMO_USER": True,
+        "DEMO_ADMIN_USER": "admin",
+        "DEMO_ADMIN_PASSWORD": "DemoAdminPassword2026!",
+        "WTF_CSRF_ENABLED": True,
+        "WTF_CSRF_CHECK_DEFAULT": True,
+        "RATELIMIT_ENABLED": False,
+        "ENABLE_EXTERNAL_GEOIP": False,
+    })
+
+    with test_app.test_client() as client:
+        yield client, db_path, test_app
+
+    try:
+        os.unlink(db_path)
+    except OSError:
+        pass
+
 
 def test_csrf_token_endpoint_accessible(test_env):
     """CSRF token must be fetchable by unauthenticated clients (needed for login form)."""
@@ -268,6 +302,72 @@ def test_csrf_token_endpoint_accessible(test_env):
     assert "csrf_token" in data
     assert isinstance(data["csrf_token"], str)
     assert len(data["csrf_token"]) > 10
+
+
+def test_csrf_enforced_missing_token_rejected_login(csrf_client):
+    """When CSRF is enabled, POST to /api/auth/login without token must return 400."""
+    client, _, _ = csrf_client
+    res = client.post("/api/auth/login", json={
+        "username": "admin",
+        "password": "DemoAdminPassword2026!"
+    })
+    assert res.status_code == 400
+    assert "CSRF token is missing" in res.get_json()["message"]
+
+
+def test_csrf_enforced_invalid_token_rejected_login(csrf_client):
+    """When CSRF is enabled, POST to /api/auth/login with forged token must return 400."""
+    client, _, _ = csrf_client
+    res = client.post("/api/auth/login", json={
+        "username": "admin",
+        "password": "DemoAdminPassword2026!"
+    }, headers={"X-CSRFToken": "forged-attacker-token-12345"})
+    assert res.status_code == 400
+
+
+def test_csrf_enforced_valid_token_accepted_login(csrf_client):
+    """When CSRF is enabled, POST with valid X-CSRFToken header succeeds."""
+    client, _, _ = csrf_client
+    token_res = client.get("/api/auth/csrf-token")
+    assert token_res.status_code == 200
+    token = token_res.get_json()["csrf_token"]
+
+    login_res = client.post("/api/auth/login", json={
+        "username": "admin",
+        "password": "DemoAdminPassword2026!"
+    }, headers={"X-CSRFToken": token})
+    assert login_res.status_code == 200
+    assert login_res.get_json()["status"] == "success"
+
+
+def test_csrf_enforced_simulation_endpoint(csrf_client):
+    """Simulate endpoint requires valid CSRF token when CSRF is enforced."""
+    client, _, _ = csrf_client
+    token_res = client.get("/api/auth/csrf-token")
+    token = token_res.get_json()["csrf_token"]
+
+    # Log in with valid token
+    client.post("/api/auth/login", json={
+        "username": "admin",
+        "password": "DemoAdminPassword2026!"
+    }, headers={"X-CSRFToken": token})
+
+    # Mutating simulate call without CSRF header must fail
+    res_no_token = client.post("/api/incidents/simulate", json={"attack": "Port Scan", "risk": 40})
+    assert res_no_token.status_code == 400
+
+    # Refresh CSRF token for the authenticated session
+    token_res2 = client.get("/api/auth/csrf-token")
+    token2 = token_res2.get_json()["csrf_token"]
+
+    # Mutating simulate call with valid CSRF header must succeed
+    res_valid = client.post(
+        "/api/incidents/simulate",
+        json={"attack": "Port Scan", "risk": 40},
+        headers={"X-CSRFToken": token2}
+    )
+    assert res_valid.status_code == 201
+    assert res_valid.get_json()["incident"]["attack"] == "Port Scan"
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +684,19 @@ def test_metrics_health_score_floor_is_zero(authed_env):
         _post_incident(client, attack=f"Crit {i}", risk=95)
     res = client.get("/api/metrics")
     assert res.get_json()["health_score"] >= 0
+
+
+def test_metrics_health_score_zero_exact(authed_env):
+    """Verify that when enough critical incidents exist, health_score is exactly 0 (not 100 or None)."""
+    client, _, _ = authed_env
+    # 13 * 8 = 104 > 100 deduction
+    for i in range(15):
+        _post_incident(client, attack=f"Critical Attack {i}", risk=90)
+    res = client.get("/api/metrics")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["health_score"] == 0
+    assert data["critical_count"] >= 15
 
 
 def test_metrics_simulated_vs_telemetry_count(authed_env):
