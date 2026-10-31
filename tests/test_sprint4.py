@@ -25,7 +25,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent / "backend"
 sys.path.insert(0, str(BASE_DIR))
 
 from app import create_app, get_db_connection, init_db
-from ingestion import IngestionParser, sanitize_csv_formula, calculate_fingerprint, normalize_timestamp
+from ingestion import (
+    IngestionParser, sanitize_csv_formula, calculate_fingerprint,
+    normalize_timestamp, normalize_timestamp_strict, TimestampNormalizationError
+)
 
 
 @pytest.fixture
@@ -474,4 +477,287 @@ def test_path_traversal_filename_sanitization(test_env):
     assert "\\" not in stored_name
     assert ".." not in stored_name
     conn.close()
+
+
+def test_strict_timestamp_normalization_utc_offsets():
+    """Converts timezone-aware timestamps into actual UTC and handles cross-midnight boundaries."""
+    # UTC+05:30 -> UTC (same day)
+    utc_str, orig, tz = normalize_timestamp_strict("2026-10-31T14:30:00+05:30")
+    assert utc_str == "2026-10-31 09:00:00"
+    assert orig == "2026-10-31T14:30:00+05:30"
+    assert "+05:30" in tz or "UTC+05:30" in tz
+
+    # UTC-05:00 -> UTC (same day)
+    utc_str, orig, tz = normalize_timestamp_strict("2026-10-31T14:00:00-05:00")
+    assert utc_str == "2026-10-31 19:00:00"
+
+    # Cross-midnight conversion: early morning UTC+05:30 rolls back to previous day in UTC
+    utc_str, _, _ = normalize_timestamp_strict("2026-10-31T02:30:00+05:30")
+    assert utc_str == "2026-10-30 21:00:00"
+
+    # Cross-midnight conversion: late evening UTC-05:00 rolls forward to next day in UTC
+    utc_str, _, _ = normalize_timestamp_strict("2026-10-31T22:00:00-05:00")
+    assert utc_str == "2026-11-01 03:00:00"
+
+    # Unix epoch seconds (1761895200 -> 2025-10-31 07:20:00 UTC)
+    utc_str, orig, tz = normalize_timestamp_strict(1761895200)
+    assert utc_str == "2025-10-31 07:20:00"
+    assert tz == "Unix_s"
+
+    # Unix epoch milliseconds (1761895200000 -> 2025-10-31 07:20:00 UTC)
+    utc_str, orig, tz = normalize_timestamp_strict(1761895200000)
+    assert utc_str == "2025-10-31 07:20:00"
+    assert tz == "Unix_ms"
+
+    # Syslog format with reference year
+    utc_str, orig, tz = normalize_timestamp_strict("Oct 31 10:14:02", reference_year=2026)
+    assert utc_str == "2026-10-31 10:14:02"
+    assert tz == "local_syslog"
+
+
+def test_strict_timestamp_normalization_rejects_missing_and_malformed():
+    """Missing or invalid timestamps are strictly rejected and never silently substituted with now()."""
+    import pytest
+
+    with pytest.raises(TimestampNormalizationError):
+        normalize_timestamp_strict(None)
+
+    with pytest.raises(TimestampNormalizationError):
+        normalize_timestamp_strict("")
+
+    with pytest.raises(TimestampNormalizationError):
+        normalize_timestamp_strict("   ")
+
+    with pytest.raises(TimestampNormalizationError):
+        normalize_timestamp_strict("not-a-timestamp")
+
+    with pytest.raises(TimestampNormalizationError):
+        normalize_timestamp_strict("99/99/9999")
+
+    # In parser, missing/invalid timestamps generate parse errors rather than fabricating time
+    bad_csv = """timestamp,source_ip,attack,username,outcome,risk
+,198.51.100.1,Bad Timestamp,user1,failure,50
+INVALID_TIME,198.51.100.1,Bad Timestamp,user2,failure,50
+"""
+    records, errors, _ = IngestionParser.parse_content(bad_csv, format_name="canonical_csv")
+    assert len(records) == 0
+    assert len(errors) == 2
+    assert "timestamp" in errors[0]["error"].lower()
+    assert "timestamp" in errors[1]["error"].lower()
+
+
+def test_parsers_eliminate_fabricated_attributes():
+    """Parsers strictly refrain from fabricating IPs, hostnames, usernames, or attack classifications."""
+    # 1. Windows Event without IP: should NOT fabricate 10.0.0.15 or destination 10.0.0.1
+    windows_json = json.dumps([{
+        "Event": {
+            "System": {
+                "EventID": 4625,
+                "TimeCreated": {"@SystemTime": "2026-10-31T12:00:00.000Z"}
+            },
+            "EventData": {
+                "TargetUserName": "local_admin",
+                "IpAddress": "-"  # Local console logon, unobserved IP
+            }
+        }
+    }])
+    records, errors, fmt = IngestionParser.parse_content(windows_json, format_name="windows_event")
+    assert len(errors) == 0
+    assert len(records) == 1
+    # Source IP is unknown, not fabricated 10.0.0.15
+    assert records[0]["source_ip"] == "unknown"
+    assert records[0]["dest_ip"] is None  # NOT 10.0.0.1
+    assert records[0]["field_provenance"]["dest_ip"] == "unavailable"
+    assert records[0]["field_provenance"]["source_ip"] == "unavailable"
+
+    # 2. Linux SSH: single failure should NOT be classified as confirmed brute force
+    ssh_line = "Oct 31 12:00:01 bastion sshd[100]: Failed password for root from 198.51.100.5 port 55123 ssh2\n"
+    records, errors, _ = IngestionParser.parse_content(ssh_line, format_name="linux_ssh")
+    assert len(records) == 1
+    assert records[0]["attack_type"] == "SSH Login Attempt"
+    assert "brute force" not in records[0]["attack_type"].lower()
+    assert records[0]["dest_ip"] is None  # NOT fabricated 192.168.1.10
+
+    # 3. Zeek Conn: should NOT fabricate username 'network_flow' or hostname 'zeek-sensor-01'
+    zeek_json = json.dumps([{
+        "ts": 1793440000.0,
+        "id.orig_h": "203.0.113.88",
+        "id.resp_h": "198.51.100.5",
+        "id.resp_p": 443,
+        "proto": "tcp",
+        "conn_state": "SF"
+    }])
+    records, errors, _ = IngestionParser.parse_content(zeek_json, format_name="zeek_conn")
+    assert len(records) == 1
+    assert records[0]["username"] is None
+    assert records[0]["hostname"] is None
+    assert records[0]["field_provenance"]["username"] == "unavailable"
+
+
+def test_deduplication_retains_same_second_repeated_events(test_env):
+    """5 distinct SSH failures in the exact same second are all retained, and re-importing is idempotent."""
+    client = test_env["client"]
+    token = login_user(client)
+
+    # 5 SSH failures at Oct 31 12:00:00 with distinct ports and syslog lines
+    ssh_burst = """Oct 31 12:00:00 host sshd[101]: Failed password for root from 198.51.100.80 port 40001 ssh2
+Oct 31 12:00:00 host sshd[102]: Failed password for root from 198.51.100.80 port 40002 ssh2
+Oct 31 12:00:00 host sshd[103]: Failed password for root from 198.51.100.80 port 40003 ssh2
+Oct 31 12:00:00 host sshd[104]: Failed password for root from 198.51.100.80 port 40004 ssh2
+Oct 31 12:00:00 host sshd[105]: Failed password for root from 198.51.100.80 port 40005 ssh2
+"""
+    # 1. First import: ALL 5 events must be accepted
+    res1 = client.post("/api/ingestion/import", json={
+        "content": ssh_burst,
+        "format": "linux_ssh",
+        "filename": "same_sec_burst.log"
+    }, headers={"X-CSRFToken": token})
+    assert res1.status_code == 201
+    data1 = res1.get_json()
+    assert data1["accepted_records"] == 5
+    assert data1["duplicate_records"] == 0
+
+    # 2. Re-import identical payload: 100% idempotent deduplication
+    res2 = client.post("/api/ingestion/import", json={
+        "content": ssh_burst,
+        "format": "linux_ssh",
+        "filename": "same_sec_burst.log"
+    }, headers={"X-CSRFToken": token})
+    assert res2.status_code == 201
+    data2 = res2.get_json()
+    assert data2["accepted_records"] == 0
+    assert data2["duplicate_records"] == 5
+
+
+def test_historical_correlation_strict_temporal_boundaries(test_env):
+    """Historical batches at different times never correlate across sliding window boundaries."""
+    client = test_env["client"]
+    token = login_user(client)
+
+    # Batch 1: 3 attempts from attacker 198.51.100.77 on 2026-01-15 (below 5-event threshold for spray)
+    batch1_csv = """timestamp,source_ip,attack,category,username,outcome,risk
+2026-01-15 10:00:01,198.51.100.77,SSH Login Attempt,Authentication,user_a,failure,85
+2026-01-15 10:00:05,198.51.100.77,SSH Login Attempt,Authentication,user_b,failure,85
+2026-01-15 10:00:10,198.51.100.77,SSH Login Attempt,Authentication,user_c,failure,85
+"""
+    res1 = client.post("/api/ingestion/import", json={
+        "content": batch1_csv,
+        "format": "canonical_csv",
+        "filename": "batch1_jan.csv"
+    }, headers={"X-CSRFToken": token})
+    assert res1.status_code == 201
+    data1 = res1.get_json()
+    assert data1["accepted_records"] == 3
+    # Only 3 events (threshold is 5), so no alert generated
+    assert data1["correlated_alerts_generated"] == 0
+
+    # Batch 2: 3 attempts from SAME attacker IP months later on 2026-06-20
+    batch2_csv = """timestamp,source_ip,attack,category,username,outcome,risk
+2026-06-20 15:00:01,198.51.100.77,SSH Login Attempt,Authentication,user_d,failure,85
+2026-06-20 15:00:05,198.51.100.77,SSH Login Attempt,Authentication,user_e,failure,85
+2026-06-20 15:00:10,198.51.100.77,SSH Login Attempt,Authentication,user_f,failure,85
+"""
+    res2 = client.post("/api/ingestion/import", json={
+        "content": batch2_csv,
+        "format": "canonical_csv",
+        "filename": "batch2_june.csv"
+    }, headers={"X-CSRFToken": token})
+    assert res2.status_code == 201
+    data2 = res2.get_json()
+    assert data2["accepted_records"] == 3
+
+    # CRITICAL ASSERTION: The 3 events in June must NOT correlate with the 3 events in January!
+    # If upper/lower bounds were broken, they would sum to 6 and trigger an alert.
+    assert data2["correlated_alerts_generated"] == 0
+
+
+def test_detection_failure_visibility_and_safe_retry(test_env, monkeypatch):
+    """Detection pipeline failure is clearly surfaced, and retry endpoint succeeds idempotently."""
+    client = test_env["client"]
+    token = login_user(client)
+
+    spray_csv = """timestamp,source_ip,attack,category,username,outcome,risk
+2026-10-31 05:00:01,198.51.100.90,SSH Login Attempt,Authentication,u1,failure,85
+2026-10-31 05:00:05,198.51.100.90,SSH Login Attempt,Authentication,u2,failure,85
+2026-10-31 05:00:10,198.51.100.90,SSH Login Attempt,Authentication,u3,failure,85
+2026-10-31 05:00:15,198.51.100.90,SSH Login Attempt,Authentication,u4,failure,85
+2026-10-31 05:00:20,198.51.100.90,SSH Login Attempt,Authentication,u5,failure,85
+"""
+    import app
+    orig_eval = app.evaluate_detection_pipeline
+
+    # Simulate temporary failure during initial import evaluation
+    def failing_eval(*args, **kwargs):
+        raise RuntimeError("Simulated transient detection engine crash")
+
+    monkeypatch.setattr(app, "evaluate_detection_pipeline", failing_eval)
+
+    res = client.post("/api/ingestion/import", json={
+        "content": spray_csv,
+        "format": "canonical_csv",
+        "filename": "spray_fail_test.csv"
+    }, headers={"X-CSRFToken": token})
+
+    # Surfaced as partial success with detection_status = 'failed'
+    assert res.status_code in (200, 207)
+    data = res.get_json()
+    assert data["accepted_records"] == 5
+    assert data["detection_status"] == "failed"
+    assert "Simulated transient detection engine crash" in data["detection_error"]
+    batch_id = data["batch_id"]
+
+    # Restore real pipeline and invoke retry endpoint
+    monkeypatch.setattr(app, "evaluate_detection_pipeline", orig_eval)
+
+    retry_res = client.post(f"/api/ingestion/batches/{batch_id}/retry-detection", headers={"X-CSRFToken": token})
+    assert retry_res.status_code == 200
+    retry_data = retry_res.get_json()
+    assert retry_data["detection_status"] == "completed"
+    assert retry_data["correlated_alerts_generated"] >= 1
+
+
+def test_preserve_raw_payload_and_integrity_hashes(test_env):
+    """Raw payload is bounded, hashed via SHA-256, and queryable with forensic metadata."""
+    client = test_env["client"]
+    token = login_user(client)
+
+    csv_data = """timestamp,source_ip,attack,username,outcome,risk
+2026-10-31 16:30:00+05:30,198.51.100.12,Auth Test,forensic_user,failure,70
+"""
+    res = client.post("/api/ingestion/import", json={
+        "content": csv_data,
+        "format": "canonical_csv",
+        "filename": "forensic_test.csv"
+    }, headers={"X-CSRFToken": token})
+    assert res.status_code == 201
+
+    conn = get_db_connection(test_env["db_path"])
+    c = conn.cursor()
+    c.execute("SELECT id FROM security_events WHERE username = 'forensic_user'")
+    row = c.fetchone()
+    assert row is not None
+    event_id = row["id"]
+    conn.close()
+
+    # Query event detail
+    detail_res = client.get(f"/api/ingestion/events/{event_id}")
+    assert detail_res.status_code == 200
+    evt = detail_res.get_json()
+
+    # Converted UTC timestamp
+    assert evt["event_time"] == "2026-10-31 11:00:00"
+    # Preserved original timestamp and timezone
+    assert evt["original_timestamp"] == "2026-10-31 16:30:00+05:30"
+    assert "+05:30" in evt["original_timezone"] or "UTC+05:30" in evt["original_timezone"]
+
+    # Cryptographic integrity hash of raw payload
+    assert evt["raw_payload"] != ""
+    assert evt["raw_hash"] is not None
+    import hashlib
+    expected_hash = hashlib.sha256(evt["raw_payload"].encode("utf-8")).hexdigest()
+    assert evt["raw_hash"] == expected_hash
+
+    # Field provenance
+    assert evt["field_provenance"]["source_ip"] == "observed"
+    assert evt["field_provenance"]["dest_ip"] == "unavailable"
 

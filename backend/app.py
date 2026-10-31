@@ -26,12 +26,14 @@ from dotenv import load_dotenv
 try:
     from ingestion import (
         IngestionParser, sanitize_csv_formula, calculate_fingerprint,
-        is_valid_ip, MAX_FILE_SIZE, MAX_RECORDS_PER_BATCH
+        is_valid_ip, MAX_FILE_SIZE, MAX_RECORDS_PER_BATCH,
+        normalize_timestamp_strict, TimestampNormalizationError
     )
 except ImportError:
     from backend.ingestion import (
         IngestionParser, sanitize_csv_formula, calculate_fingerprint,
-        is_valid_ip, MAX_FILE_SIZE, MAX_RECORDS_PER_BATCH
+        is_valid_ip, MAX_FILE_SIZE, MAX_RECORDS_PER_BATCH,
+        normalize_timestamp_strict, TimestampNormalizationError
     )
 
 # Sprint 3: Detection Engineering Constants & Allowed Allowlist Definitions
@@ -581,6 +583,9 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
             created_at TEXT NOT NULL,
             status TEXT NOT NULL CHECK(status IN ('completed', 'partial', 'failed')),
             errors_json TEXT,
+            detection_status TEXT NOT NULL DEFAULT 'completed' CHECK(detection_status IN ('pending', 'completed', 'failed', 'skipped')),
+            detection_alerts_count INTEGER NOT NULL DEFAULT 0,
+            detection_error TEXT,
             FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
         )
     ''')
@@ -609,10 +614,38 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
             provenance TEXT NOT NULL DEFAULT 'imported_unverified' CHECK(provenance IN ('synthetic', 'imported_unverified', 'system')),
             metadata_json TEXT,
             incident_id INTEGER,
+            original_timestamp TEXT,
+            original_timezone TEXT,
+            raw_payload TEXT,
+            raw_hash TEXT,
+            field_provenance_json TEXT,
             FOREIGN KEY (batch_id) REFERENCES ingestion_batches(batch_id) ON DELETE CASCADE,
             FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE SET NULL
         )
     ''')
+
+    # Safe migration: ensure newly added forensic & detection tracking columns exist on pre-existing tables
+    c.execute("PRAGMA table_info(ingestion_batches)")
+    existing_bch_cols = {r["name"] for r in c.fetchall()}
+    if "detection_status" not in existing_bch_cols:
+        c.execute("ALTER TABLE ingestion_batches ADD COLUMN detection_status TEXT NOT NULL DEFAULT 'completed'")
+    if "detection_alerts_count" not in existing_bch_cols:
+        c.execute("ALTER TABLE ingestion_batches ADD COLUMN detection_alerts_count INTEGER NOT NULL DEFAULT 0")
+    if "detection_error" not in existing_bch_cols:
+        c.execute("ALTER TABLE ingestion_batches ADD COLUMN detection_error TEXT")
+
+    c.execute("PRAGMA table_info(security_events)")
+    existing_sec_cols = {r["name"] for r in c.fetchall()}
+    if "original_timestamp" not in existing_sec_cols:
+        c.execute("ALTER TABLE security_events ADD COLUMN original_timestamp TEXT")
+    if "original_timezone" not in existing_sec_cols:
+        c.execute("ALTER TABLE security_events ADD COLUMN original_timezone TEXT")
+    if "raw_payload" not in existing_sec_cols:
+        c.execute("ALTER TABLE security_events ADD COLUMN raw_payload TEXT")
+    if "raw_hash" not in existing_sec_cols:
+        c.execute("ALTER TABLE security_events ADD COLUMN raw_hash TEXT")
+    if "field_provenance_json" not in existing_sec_cols:
+        c.execute("ALTER TABLE security_events ADD COLUMN field_provenance_json TEXT")
 
     c.execute("PRAGMA foreign_keys = ON")
 
@@ -1113,100 +1146,125 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
 
     newly_generated_alerts = []
     real_wall_clock_now = datetime.now()
-    now = reference_time if reference_time else real_wall_clock_now
     now_str = real_wall_clock_now.strftime("%Y-%m-%d %H:%M:%S")
 
-    # If target incidents are provided without explicit reference_time, check if they are historical telemetry
-    if target_incident_ids and reference_time is None:
+    # Determine evaluation anchor timestamps with strict temporal clustering
+    anchor_times = []
+    if reference_time:
+        anchor_times = [reference_time]
+    elif target_incident_ids:
         try:
             placeholders = ",".join("?" for _ in target_incident_ids)
-            c.execute(f"SELECT MAX(time) AS max_t FROM logs WHERE id IN ({placeholders})", target_incident_ids)
-            max_row = c.fetchone()
-            if max_row and max_row["max_t"]:
-                max_dt = datetime.strptime(max_row["max_t"], "%Y-%m-%d %H:%M:%S")
-                if (real_wall_clock_now - max_dt).total_seconds() > 300:
-                    now = max_dt
+            c.execute(f"SELECT DISTINCT time FROM logs WHERE id IN ({placeholders}) ORDER BY time ASC", target_incident_ids)
+            rows = c.fetchall()
+            raw_times = []
+            for r in rows:
+                if r["time"]:
+                    try:
+                        raw_times.append(datetime.strptime(r["time"], "%Y-%m-%d %H:%M:%S"))
+                    except Exception:
+                        pass
+            if raw_times:
+                # Group distinct target incident timestamps into temporal clusters
+                cluster_anchors = []
+                current_cluster = [raw_times[0]]
+                for t in raw_times[1:]:
+                    if (t - current_cluster[-1]).total_seconds() > 180:
+                        cluster_anchors.append(max(current_cluster))
+                        current_cluster = [t]
+                    else:
+                        current_cluster.append(t)
+                cluster_anchors.append(max(current_cluster))
+                anchor_times = cluster_anchors
+            else:
+                anchor_times = [real_wall_clock_now]
         except Exception:
-            pass
+            anchor_times = [real_wall_clock_now]
+    else:
+        anchor_times = [real_wall_clock_now]
 
-    for rule in rules:
-        try:
-            conditions, err = validate_rule_conditions(rule["conditions_json"])
-            if err:
-                continue
+    for eval_now in anchor_times:
+        for rule in rules:
+            try:
+                conditions, err = validate_rule_conditions(rule["conditions_json"])
+                if err:
+                    continue
 
-            window_seconds = rule["time_window_seconds"]
-            cutoff = (now - timedelta(seconds=window_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+                window_seconds = rule["time_window_seconds"]
+                cutoff = (eval_now - timedelta(seconds=window_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+                upper_bound = eval_now.strftime("%Y-%m-%d %H:%M:%S")
 
-            c.execute("""
-                SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
-                FROM logs
-                WHERE time >= ?
-                ORDER BY time ASC
-            """, (cutoff,))
-            recent_logs = [dict(r) for r in c.fetchall()]
-
-            if target_incident_ids:
-                placeholders = ",".join("?" for _ in target_incident_ids)
-                c.execute(f"""
+                # Strictly bounded lower and upper event-time boundaries
+                c.execute("""
                     SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
                     FROM logs
-                    WHERE id IN ({placeholders})
-                """, target_incident_ids)
-                target_rows = [dict(r) for r in c.fetchall()]
-                existing_ids = {r["id"] for r in recent_logs}
-                for tr in target_rows:
-                    if tr["id"] not in existing_ids:
-                        recent_logs.append(tr)
+                    WHERE time >= ? AND time <= ?
+                    ORDER BY time ASC
+                """, (cutoff, upper_bound))
+                recent_logs = [dict(r) for r in c.fetchall()]
 
-            # Record verified evaluated incidents into evaluated_events
-            for inc in recent_logs:
-                c.execute("""
-                    INSERT OR IGNORE INTO evaluated_events (incident_id, evaluated_at)
-                    VALUES (?, ?)
-                """, (inc["id"], now_str))
+                if target_incident_ids:
+                    placeholders = ",".join("?" for _ in target_incident_ids)
+                    c.execute(f"""
+                        SELECT id, username, attack, behavior, risk, ip, location, time, resolved, is_simulated
+                        FROM logs
+                        WHERE id IN ({placeholders}) AND time >= ? AND time <= ?
+                    """, (*target_incident_ids, cutoff, upper_bound))
+                    target_rows = [dict(r) for r in c.fetchall()]
+                    existing_ids = {r["id"] for r in recent_logs}
+                    for tr in target_rows:
+                        if tr["id"] not in existing_ids:
+                            recent_logs.append(tr)
 
-            matching_incidents = [inc for inc in recent_logs if incident_matches_rule(inc, conditions)]
-            if not matching_incidents:
-                continue
+                # Record verified evaluated incidents into evaluated_events
+                for inc in recent_logs:
+                    c.execute("""
+                        INSERT OR IGNORE INTO evaluated_events (incident_id, evaluated_at)
+                        VALUES (?, ?)
+                    """, (inc["id"], now_str))
 
-            group_by = rule["group_by_field"]
-            grouped_matches = {}
+                matching_incidents = [inc for inc in recent_logs if incident_matches_rule(inc, conditions)]
+                if not matching_incidents:
+                    continue
 
-            if group_by == "none":
-                grouped_matches["all"] = matching_incidents
-            else:
-                for inc in matching_incidents:
-                    key_val = str(inc.get(group_by, "unknown"))
-                    grouped_matches.setdefault(key_val, []).append(inc)
+                group_by = rule["group_by_field"]
+                grouped_matches = {}
 
-            for group_key, matched_list in grouped_matches.items():
-                # Distinct behavior check for multi-behavior rule
-                if rule["rule_id"] == "RULE-BEHAV-005":
-                    distinct_behaviors = {inc.get("behavior") for inc in matched_list if inc.get("behavior") and str(inc.get("behavior")).strip()}
-                    if len(distinct_behaviors) < rule["threshold"]:
+                if group_by == "none":
+                    grouped_matches["all"] = matching_incidents
+                else:
+                    for inc in matching_incidents:
+                        key_val = str(inc.get(group_by, "unknown"))
+                        grouped_matches.setdefault(key_val, []).append(inc)
+
+                for group_key, matched_list in grouped_matches.items():
+                    # Distinct behavior check for multi-behavior rule
+                    if rule["rule_id"] == "RULE-BEHAV-005":
+                        distinct_behaviors = {inc.get("behavior") for inc in matched_list if inc.get("behavior") and str(inc.get("behavior")).strip()}
+                        if len(distinct_behaviors) < rule["threshold"]:
+                            continue
+
+                    # Distinct target usernames check for multi-target password spraying rule
+                    if rule["rule_id"] == "RULE-BURST-004":
+                        distinct_users = {inc.get("username") for inc in matched_list if inc.get("username") and str(inc.get("username")).strip()}
+                        if len(distinct_users) < rule["threshold"]:
+                            continue
+
+                    if len(matched_list) < rule["threshold"]:
                         continue
 
-                # Distinct target usernames check for multi-target password spraying rule
-                if rule["rule_id"] == "RULE-BURST-004":
-                    distinct_users = {inc.get("username") for inc in matched_list if inc.get("username") and str(inc.get("username")).strip()}
-                    if len(distinct_users) < rule["threshold"]:
-                        continue
-
-                if len(matched_list) >= rule["threshold"]:
                     sorted_ids = sorted([inc["id"] for inc in matched_list])
                     correlation_key = f"{rule['rule_id']}:{group_by}:{group_key}" if group_by != "none" else f"{rule['rule_id']}:global"
 
                     # Stable correlation identity & alert update / suppression strategy
-                    # Check for an active (open or investigating) alert for this rule & correlation_key
-                    # that is STILL within the active correlation window (last_event_time >= cutoff)
+                    # Strictly bounded correlation window for active alerts
                     c.execute("""
                         SELECT id, alert_id, matched_incident_ids_json, first_event_time, last_event_time, matched_count, explanation
                         FROM detection_alerts
                         WHERE rule_id = ? AND correlation_key = ? AND status IN ('open', 'investigating')
-                          AND last_event_time >= ?
+                          AND last_event_time >= ? AND last_event_time <= ?
                         ORDER BY updated_at DESC LIMIT 1
-                    """, (rule["id"], correlation_key, cutoff))
+                    """, (rule["id"], correlation_key, cutoff, upper_bound))
                     active_alert = c.fetchone()
 
                     if active_alert:
@@ -1300,7 +1358,7 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
                     if c.fetchone():
                         continue
 
-                    alert_id = f"ALT-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+                    alert_id = f"ALT-{eval_now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
                     first_event_time = matched_list[0]["time"]
                     last_event_time = matched_list[-1]["time"]
                     primary_incident_id = matched_list[-1]["id"]
@@ -1376,8 +1434,8 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
                         VALUES (?, ?, ?, ?, 'triggered')
                     """, (rule["id"], now_str, len(matched_list), json.dumps(sorted_ids)))
 
-        except Exception as e:
-            print(f"[DetectionEngine] Error evaluating rule {rule.get('rule_id')}: {e}")
+            except Exception as e:
+                print(f"[DetectionEngine] Error evaluating rule {rule.get('rule_id')}: {e}")
 
     conn.commit()
     conn.close()
@@ -4263,8 +4321,8 @@ def create_app(test_config=None) -> Flask:
                 INSERT INTO ingestion_batches (
                     batch_id, filename, source_type, total_records, accepted_records,
                     rejected_records, duplicate_records, created_by, created_username,
-                    created_at, status, errors_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, status, errors_json, detection_status, detection_alerts_count, detection_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL)
             """, (
                 batch_id, filename, detected_format, len(records) + len(parse_errors),
                 0, rejected_count, 0, user_id, username, now_str, "partial",
@@ -4273,6 +4331,8 @@ def create_app(test_config=None) -> Flask:
 
             for rec in records:
                 evt_time = rec["event_time"]
+                orig_time = rec.get("original_timestamp")
+                orig_tz = rec.get("original_timezone")
                 batch_timestamps.append(evt_time)
                 src_ip = rec["source_ip"]
                 dest_ip = rec.get("dest_ip")
@@ -4280,15 +4340,24 @@ def create_app(test_config=None) -> Flask:
                 atk = rec["attack_type"]
                 outcome = rec["outcome"]
                 category = rec.get("category", "Authentication")
-                hostname = rec.get("hostname", "sec-host")
+                hostname = rec.get("hostname")
                 severity = rec.get("severity", "medium")
                 risk = rec.get("risk_score", 50)
                 behavior = rec.get("behavior", f"{atk} observed")
                 src_ref = rec.get("source_record_ref", "")
+                src_port = rec.get("source_port")
+                dest_port = rec.get("dest_port")
+                src_event_id = rec.get("source_event_id")
+                raw_payload = rec.get("raw_payload", "")
+                raw_hash = rec.get("raw_hash", "")
+                field_provenance_str = json.dumps(rec.get("field_provenance", {}))
                 metadata_str = json.dumps(rec.get("metadata", {}))
 
+                # Source-aware fingerprint incorporating ports, refs, IDs, and raw hashes
                 fingerprint = calculate_fingerprint(
-                    detected_format, evt_time, src_ip, dest_ip, uname, atk, outcome
+                    detected_format, evt_time, src_ip, dest_ip, uname, atk, outcome,
+                    source_port=src_port, dest_port=dest_port, source_record_ref=src_ref,
+                    source_event_id=src_event_id, raw_hash=raw_hash
                 )
 
                 # Check duplicate fingerprint
@@ -4306,7 +4375,7 @@ def create_app(test_config=None) -> Flask:
                         time, ip, attack, risk, behavior, location, resolved, username, is_simulated, provenance
                     ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 'imported_unverified')
                 """, (
-                    evt_time, src_ip, atk, risk, behavior, hostname, uname
+                    evt_time, src_ip, atk, risk, behavior, hostname or "sec-host", uname
                 ))
                 log_id = c.lastrowid
                 new_incident_ids.append(log_id)
@@ -4318,18 +4387,20 @@ def create_app(test_config=None) -> Flask:
                     ) VALUES (?, 'new', 0, 1, ?, ?)
                 """, (log_id, now_str, now_str))
 
-                # Insert into security_events
+                # Insert into security_events with full forensic integrity attributes
                 c.execute("""
                     INSERT INTO security_events (
                         event_id, batch_id, source_type, importer, event_time, ingested_at,
                         category, attack_type, username, source_ip, dest_ip, hostname,
                         outcome, severity, risk_score, source_record_ref, fingerprint,
-                        provenance, metadata_json, incident_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported_unverified', ?, ?)
+                        provenance, metadata_json, incident_id,
+                        original_timestamp, original_timezone, raw_payload, raw_hash, field_provenance_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported_unverified', ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event_id, batch_id, detected_format, username, evt_time, now_str,
                     category, atk, uname, src_ip, dest_ip, hostname,
-                    outcome, severity, risk, src_ref, fingerprint, metadata_str, log_id
+                    outcome, severity, risk, src_ref, fingerprint, metadata_str, log_id,
+                    orig_time, orig_tz, raw_payload, raw_hash, field_provenance_str
                 ))
 
                 accepted_count += 1
@@ -4371,24 +4442,63 @@ def create_app(test_config=None) -> Flask:
         conn.close()
 
         # Trigger detection evaluation with deterministic historical timing
+        detection_status = "completed"
+        detection_error = None
         correlated_alerts = []
         if new_incident_ids:
             try:
-                max_batch_time = max(batch_timestamps) if batch_timestamps else None
-                ref_time = datetime.strptime(max_batch_time, "%Y-%m-%d %H:%M:%S") if max_batch_time else None
                 correlated_alerts = evaluate_detection_pipeline(
                     target_incident_ids=new_incident_ids,
-                    reference_time=ref_time,
                     db_path=app.config["DATABASE_PATH"]
                 )
+                detection_status = "completed"
             except Exception as e:
+                detection_status = "failed"
+                detection_error = str(e)
                 print(f"[DetectionPipeline] Warning: Ingestion correlation evaluation error: {e}")
+        else:
+            detection_status = "skipped"
+
+        # Update batch detection status
+        try:
+            conn_bch = get_db_connection(app.config["DATABASE_PATH"])
+            c_bch = conn_bch.cursor()
+            c_bch.execute("""
+                UPDATE ingestion_batches
+                SET detection_status = ?, detection_error = ?, detection_alerts_count = ?
+                WHERE batch_id = ?
+            """, (detection_status, detection_error, len(correlated_alerts), batch_id))
+            conn_bch.commit()
+            conn_bch.close()
+        except Exception:
+            pass
+
+        if detection_status == "failed":
+            return jsonify({
+                "status": "partial_success",
+                "persistence_status": batch_status,
+                "detection_status": "failed",
+                "detection_error": detection_error,
+                "batch_id": batch_id,
+                "filename": filename,
+                "source_type": detected_format,
+                "total_records": accepted_count + duplicate_count + rejected_count,
+                "accepted_records": accepted_count,
+                "duplicate_records": duplicate_count,
+                "rejected_records": rejected_count,
+                "correlated_alerts_generated": 0,
+                "errors": parse_errors[:10],
+                "summary": f"Imported {accepted_count} events from {filename} ({duplicate_count} duplicate(s) skipped, {rejected_count} rejected). Detection evaluation failed: {detection_error}. Use retry endpoint to re-evaluate.",
+                "message": f"Security events were persisted successfully, but detection pipeline evaluation failed: {detection_error}"
+            }), 200
 
         return jsonify({
             "status": "success",
             "batch_id": batch_id,
             "filename": filename,
             "source_type": detected_format,
+            "detection_status": detection_status,
+            "detection_error": None,
             "total_records": accepted_count + duplicate_count + rejected_count,
             "accepted_records": accepted_count,
             "duplicate_records": duplicate_count,
@@ -4397,6 +4507,83 @@ def create_app(test_config=None) -> Flask:
             "errors": parse_errors[:10],
             "summary": f"Imported {accepted_count} events from {filename} ({duplicate_count} duplicate(s) skipped, {rejected_count} rejected). Generated {len(correlated_alerts)} correlated detection alert(s)."
         }), 201
+
+    @app.route("/api/ingestion/batches/<batch_id>/retry-detection", methods=["POST"])
+    @login_required
+    def retry_batch_detection(batch_id: str):
+        """
+        Safely and idempotently retries detection pipeline evaluation for an imported batch.
+        Does not duplicate events or alerts.
+        """
+        clean_batch_id = str(batch_id).strip()
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute("SELECT * FROM ingestion_batches WHERE batch_id = ?", (clean_batch_id,))
+        batch = c.fetchone()
+        if not batch:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Ingestion batch '{clean_batch_id}' not found."}), 404
+
+        c.execute("SELECT incident_id FROM security_events WHERE batch_id = ? AND incident_id IS NOT NULL", (clean_batch_id,))
+        rows = c.fetchall()
+        incident_ids = [r["incident_id"] for r in rows]
+        conn.close()
+
+        if not incident_ids:
+            return jsonify({"error": "Bad Request", "message": "No valid security incidents found in this batch to evaluate."}), 400
+
+        try:
+            correlated_alerts = evaluate_detection_pipeline(
+                target_incident_ids=incident_ids,
+                db_path=app.config["DATABASE_PATH"]
+            )
+            conn = get_db_connection(app.config["DATABASE_PATH"])
+            c = conn.cursor()
+            c.execute("""
+                UPDATE ingestion_batches
+                SET detection_status = 'completed', detection_error = NULL, detection_alerts_count = ?
+                WHERE batch_id = ?
+            """, (len(correlated_alerts), clean_batch_id))
+
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            user_id = session.get("user_id")
+            username = session.get("username")
+            c.execute("""
+                INSERT INTO system_audit_log (
+                    actor_id, actor_username, action, target, reason, details, created_at
+                ) VALUES (?, ?, 'retry_detection_evaluation', ?, ?, ?, ?)
+            """, (
+                user_id, username, f"batch:{clean_batch_id}",
+                f"Retried detection evaluation for batch {clean_batch_id}",
+                json.dumps({"alerts_count": len(correlated_alerts)}),
+                now_str
+            ))
+            conn.commit()
+            conn.close()
+
+            return jsonify({
+                "status": "success",
+                "batch_id": clean_batch_id,
+                "detection_status": "completed",
+                "correlated_alerts_generated": len(correlated_alerts),
+                "message": f"Detection evaluation completed successfully ({len(correlated_alerts)} alert(s) generated or updated)."
+            }), 200
+        except Exception as e:
+            conn = get_db_connection(app.config["DATABASE_PATH"])
+            c = conn.cursor()
+            c.execute("""
+                UPDATE ingestion_batches
+                SET detection_status = 'failed', detection_error = ?
+                WHERE batch_id = ?
+            """, (str(e), clean_batch_id))
+            conn.commit()
+            conn.close()
+            return jsonify({
+                "error": "Detection Evaluation Failed",
+                "batch_id": clean_batch_id,
+                "detection_status": "failed",
+                "message": f"Detection evaluation failed: {str(e)}"
+            }), 500
 
     @app.route("/api/ingestion/batches", methods=["GET"])
     @login_required
@@ -4414,7 +4601,8 @@ def create_app(test_config=None) -> Flask:
 
         c.execute("""
             SELECT id, batch_id, filename, source_type, total_records, accepted_records,
-                   rejected_records, duplicate_records, created_username, created_at, status
+                   rejected_records, duplicate_records, created_username, created_at, status,
+                   detection_status, detection_alerts_count, detection_error
             FROM ingestion_batches
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
@@ -4443,7 +4631,7 @@ def create_app(test_config=None) -> Flask:
         c.execute("""
             SELECT id, batch_id, filename, source_type, total_records, accepted_records,
                    rejected_records, duplicate_records, created_username, created_at,
-                   status, errors_json
+                   status, errors_json, detection_status, detection_alerts_count, detection_error
             FROM ingestion_batches
             WHERE batch_id = ?
         """, (clean_batch_id,))
@@ -4460,7 +4648,8 @@ def create_app(test_config=None) -> Flask:
 
         c.execute("""
             SELECT id, event_id, event_time, category, attack_type, username, source_ip,
-                   dest_ip, hostname, outcome, severity, risk_score, incident_id
+                   dest_ip, hostname, outcome, severity, risk_score, incident_id,
+                   original_timestamp, original_timezone, raw_hash
             FROM security_events
             WHERE batch_id = ?
             ORDER BY event_time ASC
@@ -4547,7 +4736,8 @@ def create_app(test_config=None) -> Flask:
         query = f"""
             SELECT id, event_id, batch_id, source_type, importer, event_time, ingested_at,
                    category, attack_type, username, source_ip, dest_ip, hostname,
-                   outcome, severity, risk_score, source_record_ref, provenance, incident_id
+                   outcome, severity, risk_score, source_record_ref, provenance, incident_id,
+                   original_timestamp, original_timezone, raw_hash
             FROM security_events
             {where_clause}
             ORDER BY {order_col} {sort_dir}
@@ -4570,7 +4760,7 @@ def create_app(test_config=None) -> Flask:
     @app.route("/api/ingestion/events/<int:event_id>", methods=["GET"])
     @login_required
     def get_security_event_detail(event_id: int):
-        """Returns complete normalized security event details with metadata and linked case."""
+        """Returns complete normalized security event details with metadata, raw payload, integrity hash, and linked case."""
         conn = get_db_connection(app.config["DATABASE_PATH"])
         c = conn.cursor()
 
@@ -4578,7 +4768,8 @@ def create_app(test_config=None) -> Flask:
             SELECT id, event_id, batch_id, source_type, importer, event_time, ingested_at,
                    category, attack_type, username, source_ip, dest_ip, hostname,
                    outcome, severity, risk_score, source_record_ref, fingerprint,
-                   provenance, metadata_json, incident_id
+                   provenance, metadata_json, incident_id,
+                   original_timestamp, original_timezone, raw_payload, raw_hash, field_provenance_json
             FROM security_events
             WHERE id = ?
         """, (event_id,))
@@ -4592,6 +4783,11 @@ def create_app(test_config=None) -> Flask:
             evt_data["metadata"] = json.loads(evt_data.pop("metadata_json") or "{}")
         except Exception:
             evt_data["metadata"] = {}
+
+        try:
+            evt_data["field_provenance"] = json.loads(evt_data.pop("field_provenance_json") or "{}")
+        except Exception:
+            evt_data["field_provenance"] = {}
 
         if evt_data.get("incident_id"):
             c.execute("""
@@ -4707,8 +4903,8 @@ def create_app(test_config=None) -> Flask:
                 INSERT INTO ingestion_batches (
                     batch_id, filename, source_type, total_records, accepted_records,
                     rejected_records, duplicate_records, created_by, created_username,
-                    created_at, status, errors_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, status, errors_json, detection_status, detection_alerts_count, detection_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, NULL)
             """, (
                 batch_id, fname, detected_format, len(records) + len(parse_errors),
                 0, rejected_count, 0, user_id, username, now_str, "completed",
@@ -4717,6 +4913,8 @@ def create_app(test_config=None) -> Flask:
 
             for rec in records:
                 evt_time = rec["event_time"]
+                orig_time = rec.get("original_timestamp")
+                orig_tz = rec.get("original_timezone")
                 batch_timestamps.append(evt_time)
                 src_ip = rec["source_ip"]
                 dest_ip = rec.get("dest_ip")
@@ -4724,15 +4922,23 @@ def create_app(test_config=None) -> Flask:
                 atk = rec["attack_type"]
                 outcome = rec["outcome"]
                 category = rec.get("category", "Authentication")
-                hostname = rec.get("hostname", "sec-host")
+                hostname = rec.get("hostname")
                 severity = rec.get("severity", "medium")
                 risk = rec.get("risk_score", 50)
                 behavior = rec.get("behavior", f"{atk} observed")
                 src_ref = rec.get("source_record_ref", "")
+                src_port = rec.get("source_port")
+                dest_port = rec.get("dest_port")
+                src_event_id = rec.get("source_event_id")
+                raw_payload = rec.get("raw_payload", "")
+                raw_hash = rec.get("raw_hash", "")
+                field_provenance_str = json.dumps(rec.get("field_provenance", {}))
                 metadata_str = json.dumps(rec.get("metadata", {}))
 
                 fingerprint = calculate_fingerprint(
-                    detected_format, evt_time, src_ip, dest_ip, uname, atk, outcome
+                    detected_format, evt_time, src_ip, dest_ip, uname, atk, outcome,
+                    source_port=src_port, dest_port=dest_port, source_record_ref=src_ref,
+                    source_event_id=src_event_id, raw_hash=raw_hash
                 )
 
                 c.execute("SELECT id FROM security_events WHERE fingerprint = ?", (fingerprint,))
@@ -4747,7 +4953,7 @@ def create_app(test_config=None) -> Flask:
                         time, ip, attack, risk, behavior, location, resolved, username, is_simulated, provenance
                     ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 'imported_unverified')
                 """, (
-                    evt_time, src_ip, atk, risk, behavior, hostname, uname
+                    evt_time, src_ip, atk, risk, behavior, hostname or "sec-host", uname
                 ))
                 log_id = c.lastrowid
                 new_incident_ids.append(log_id)
@@ -4763,12 +4969,14 @@ def create_app(test_config=None) -> Flask:
                         event_id, batch_id, source_type, importer, event_time, ingested_at,
                         category, attack_type, username, source_ip, dest_ip, hostname,
                         outcome, severity, risk_score, source_record_ref, fingerprint,
-                        provenance, metadata_json, incident_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported_unverified', ?, ?)
+                        provenance, metadata_json, incident_id,
+                        original_timestamp, original_timezone, raw_payload, raw_hash, field_provenance_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported_unverified', ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event_id, batch_id, detected_format, username, evt_time, now_str,
                     category, atk, uname, src_ip, dest_ip, hostname,
-                    outcome, severity, risk, src_ref, fingerprint, metadata_str, log_id
+                    outcome, severity, risk, src_ref, fingerprint, metadata_str, log_id,
+                    orig_time, orig_tz, raw_payload, raw_hash, field_provenance_str
                 ))
 
                 accepted_count += 1

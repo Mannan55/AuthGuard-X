@@ -381,6 +381,11 @@
       async getBatch(batchId) {
         return apiFetch(`/api/ingestion/batches/${encodeURIComponent(batchId)}`);
       },
+      async retryDetection(batchId) {
+        return apiFetch(`/api/ingestion/batches/${encodeURIComponent(batchId)}/retry-detection`, {
+          method: 'POST'
+        });
+      },
       async getEvents(params = {}) {
         const query = new URLSearchParams();
         Object.entries(params).forEach(([k, v]) => {

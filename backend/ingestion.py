@@ -1,8 +1,21 @@
 """
-AuthGuard-X — Security Event Ingestion & Normalization Engine (Sprint 4)
+AuthGuard-X — Security Event Ingestion & Normalization Engine (Sprint 4 Hardened)
 
 Provides local-first log parsing, multi-format normalization, deterministic deduplication,
-input validation, CSV formula injection defense, and realistic training telemetry ingestion.
+input validation, CSV formula injection defense, strict forensic evidence preservation,
+and realistic training telemetry ingestion.
+
+Forensic Evidence Retention & Data Provenance:
+- Bounded Raw Payload Retention: Original raw source records are preserved up to 64 KB per event
+  to protect forensic fidelity while preventing memory/disk exhaustion attacks.
+- Cryptographic Integrity: Every preserved raw payload is hashed via SHA-256 (raw_hash) upon ingestion
+  to detect tampering and verify evidence authenticity.
+- Strict Timestamp Normalization: Converts all timezone-aware timestamps into actual UTC.
+  Preserves original timestamp strings and timezone metadata. Never silently substitutes ingestion time.
+- Zero Evidence Fabrication: Unavailable attributes are strictly represented as null/unknown.
+  Field provenance (observed, inferred, unavailable) is explicitly tracked for all records.
+- Source-Aware Deduplication: Stable source event IDs, ports, timestamps, and raw hashes prevent
+  collapsing legitimate same-second repeated events while guaranteeing idempotent re-imports.
 
 Supported Formats:
 1. Canonical CSV (Headers: timestamp, ip, attack, risk, username, dest_ip, hostname, outcome, behavior)
@@ -23,6 +36,7 @@ from typing import Dict, List, Tuple, Any, Optional
 
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 MAX_RECORDS_PER_BATCH = 5000
+MAX_RAW_PAYLOAD_SIZE = 64 * 1024  # 64 KB
 
 # Formula injection prefixes
 CSV_FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
@@ -67,6 +81,11 @@ LINUX_SSH_PATTERNS = [
 ]
 
 
+class TimestampNormalizationError(ValueError):
+    """Raised when an event timestamp is missing, empty, or unparseable."""
+    pass
+
+
 def sanitize_csv_formula(value: Any) -> str:
     """Prepend single-quote to prevent CSV formula injection if value starts with =, +, -, @, \\t, \\r."""
     if value is None:
@@ -89,42 +108,90 @@ def is_valid_ip(ip_str: str) -> bool:
         return False
 
 
-def normalize_timestamp(raw_time: Any, reference_year: Optional[int] = None) -> str:
+def normalize_timestamp_strict(
+    raw_time: Any,
+    reference_year: Optional[int] = None
+) -> Tuple[str, str, Optional[str]]:
     """
-    Normalizes various timestamp formats into UTC format string 'YYYY-MM-DD HH:MM:SS'.
-    Supports:
-    - ISO 8601 strings (with or without 'T', 'Z', timezone offsets)
-    - Syslog month-day strings (e.g., 'Oct 25 10:14:02')
-    - Unix epoch integer/float (seconds or milliseconds)
+    Strictly normalizes raw timestamp into UTC format string 'YYYY-MM-DD HH:MM:SS'.
+    Converts timezone-aware timestamps into actual UTC.
+    Preserves original timestamp string and timezone/offset metadata.
+    Never silently substitutes ingestion time for invalid or missing event time.
+
+    Returns:
+        (utc_formatted_str, original_raw_str, original_tz_str)
+
+    Raises:
+        TimestampNormalizationError: if timestamp is missing, empty, or cannot be parsed.
     """
     if raw_time is None:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        raise TimestampNormalizationError("Missing event timestamp (null)")
 
-    # Numeric Unix timestamps (epoch)
+    orig_str = str(raw_time).strip()
+    if not orig_str:
+        raise TimestampNormalizationError("Missing event timestamp (empty)")
+
+    # 1. Numeric Unix timestamps (epoch seconds or milliseconds)
+    num_val = None
     if isinstance(raw_time, (int, float)):
-        # If milliseconds (greater than year 2100 in seconds: 4102444800)
-        if raw_time > 4102444800:
-            raw_time = raw_time / 1000.0
-        dt = datetime.fromtimestamp(raw_time, tz=timezone.utc)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
+        num_val = float(raw_time)
+    else:
+        # Check if entire string is numeric (with optional decimal point)
+        if re.match(r'^-?\d+(?:\.\d+)?$', orig_str):
+            try:
+                num_val = float(orig_str)
+            except ValueError:
+                num_val = None
 
-    s = str(raw_time).strip()
-    if not s:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    if num_val is not None:
+        # Detect milliseconds: timestamps > 4102444800 (year 2100 in seconds)
+        if abs(num_val) > 4102444800:
+            epoch_sec = num_val / 1000.0
+            tz_tag = "Unix_ms"
+        else:
+            epoch_sec = num_val
+            tz_tag = "Unix_s"
+        try:
+            dt = datetime.fromtimestamp(epoch_sec, tz=timezone.utc)
+            return dt.strftime("%Y-%m-%d %H:%M:%S"), orig_str, tz_tag
+        except (ValueError, OverflowError, OSError) as e:
+            raise TimestampNormalizationError(f"Invalid Unix epoch timestamp '{orig_str}': {str(e)}")
 
-    # If numeric string
+    # 2. Syslog format: 'Oct 25 10:14:02' or 'Oct  5 03:14:02'
+    syslog_match = re.match(r'^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})$', orig_str)
+    if syslog_match:
+        month_str, day_str, time_str = syslog_match.groups()
+        if month_str in MONTH_MAP:
+            month = MONTH_MAP[month_str]
+            day = int(day_str)
+            year = reference_year or datetime.now(timezone.utc).year
+            try:
+                dt = datetime(year, month, day)
+                return f"{year:04d}-{month:02d}-{day:02d} {time_str}", orig_str, "local_syslog"
+            except ValueError as e:
+                raise TimestampNormalizationError(f"Invalid syslog date '{orig_str}': {str(e)}")
+
+    # 3. ISO 8601 strings with or without timezone offsets
+    # Examples:
+    # 2026-10-31T14:30:00+05:30 -> UTC 2026-10-31 09:00:00
+    # 2026-10-31T02:30:00+05:30 -> cross-midnight UTC 2026-10-30 21:00:00
+    # 2026-10-31T22:00:00-05:00 -> cross-midnight UTC 2026-11-01 03:00:00
+    # 2026-10-31T08:30:10.000Z -> UTC 2026-10-31 08:30:10
+    iso_clean = orig_str.replace("Z", "+00:00")
     try:
-        num = float(s)
-        if num > 4102444800:
-            num = num / 1000.0
-        dt = datetime.fromtimestamp(num, tz=timezone.utc)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except ValueError:
+        dt = datetime.fromisoformat(iso_clean)
+        if dt.tzinfo is not None:
+            # Timezone-aware: convert to actual UTC
+            dt_utc = dt.astimezone(timezone.utc)
+            tz_name = str(dt.tzinfo)
+            return dt_utc.strftime("%Y-%m-%d %H:%M:%S"), orig_str, tz_name
+        else:
+            # Naive timestamp: treat as UTC
+            return dt.strftime("%Y-%m-%d %H:%M:%S"), orig_str, "UTC"
+    except Exception:
         pass
 
-    # Try ISO formats
-    # Standard: 2026-10-25 10:00:00 or 2026-10-25T10:00:00Z
-    iso_clean = s.replace("Z", "+00:00")
+    # 4. Common standard date formats (naive, assumed UTC)
     for fmt in (
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M:%S.%f",
@@ -134,41 +201,56 @@ def normalize_timestamp(raw_time: Any, reference_year: Optional[int] = None) -> 
         "%d/%m/%Y %H:%M:%S"
     ):
         try:
-            dt = datetime.strptime(s, fmt)
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
+            dt = datetime.strptime(orig_str, fmt)
+            return dt.strftime("%Y-%m-%d %H:%M:%S"), orig_str, "UTC"
         except ValueError:
             pass
 
-    try:
-        dt = datetime.fromisoformat(iso_clean)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        pass
+    # If all parsers fail, raise error - never fabricate or use now()!
+    raise TimestampNormalizationError(f"Malformed or unrecognized timestamp: '{orig_str}'")
 
-    # Syslog format: Oct 25 10:14:02 or Oct  5 10:14:02
-    syslog_match = re.match(r'^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})$', s)
-    if syslog_match:
-        month_str, day_str, time_str = syslog_match.groups()
-        month = MONTH_MAP.get(month_str, 1)
-        day = int(day_str)
-        year = reference_year or datetime.now(timezone.utc).year
-        return f"{year:04d}-{month:02d}-{day:02d} {time_str}"
 
-    # Fallback to current UTC time if unparseable
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+def normalize_timestamp(raw_time: Any, reference_year: Optional[int] = None) -> str:
+    """Compatibility wrapper that returns UTC formatted timestamp or raises TimestampNormalizationError."""
+    utc_str, _, _ = normalize_timestamp_strict(raw_time, reference_year=reference_year)
+    return utc_str
 
 
 def calculate_fingerprint(
     source_type: str,
     event_time: str,
     source_ip: str,
-    dest_ip: Optional[str],
-    username: Optional[str],
-    attack_type: str,
-    outcome: str
+    dest_ip: Optional[str] = None,
+    username: Optional[str] = None,
+    attack_type: str = "",
+    outcome: str = "",
+    source_port: Optional[str] = None,
+    dest_port: Optional[str] = None,
+    source_record_ref: Optional[str] = None,
+    source_event_id: Optional[str] = None,
+    raw_hash: Optional[str] = None
 ) -> str:
-    """Calculates SHA-256 fingerprint for deterministic event deduplication."""
-    key = f"{source_type}|{event_time}|{source_ip.strip()}|{(dest_ip or '').strip()}|{(username or '').strip()}|{attack_type.strip()}|{outcome.strip()}"
+    """
+    Calculates source-aware SHA-256 fingerprint for deterministic event deduplication.
+    Incorporates source ports, record references, source event IDs, and raw hashes
+    to retain legitimate same-second repeated events while ensuring identical re-imports
+    remain strictly idempotent.
+    """
+    key_parts = [
+        source_type or "",
+        event_time or "",
+        (source_ip or "").strip(),
+        (dest_ip or "").strip(),
+        (username or "").strip(),
+        (attack_type or "").strip(),
+        (outcome or "").strip(),
+        (str(source_port) if source_port is not None else "").strip(),
+        (str(dest_port) if dest_port is not None else "").strip(),
+        (str(source_event_id) if source_event_id is not None else "").strip(),
+        (str(source_record_ref) if source_record_ref is not None else "").strip(),
+        (str(raw_hash) if raw_hash is not None else "").strip()
+    ]
+    key = "|".join(key_parts)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -233,10 +315,6 @@ def detect_format(content: str, filename: str = "") -> str:
         # Check if Zeek conn log (contains id.orig_h, conn_state, resp_h)
         if '"id.orig_h"' in clean or '"conn_state"' in clean or '"resp_h"' in clean:
             return "zeek_conn"
-        # Check if NDJSON or standard JSON array
-        first_line = clean.splitlines()[0].strip()
-        if first_line.startswith("{") and not clean.startswith("["):
-            return "ndjson"
         return "ndjson"
 
     # CSV header check
@@ -282,20 +360,28 @@ class IngestionParser:
             if not any(row.values()):
                 continue
 
+            # Strict timestamp normalization
+            raw_time = get_col(row, "timestamp", "time", "event_time", "datetime")
+            try:
+                event_time, orig_time, orig_tz = normalize_timestamp_strict(raw_time)
+            except TimestampNormalizationError as e:
+                errors.append({"record_index": idx, "error": f"Invalid or missing timestamp: {str(e)}"})
+                continue
+
             ip = get_col(row, "source_ip", "ip", "src_ip", "orig_h")
             if not ip or not is_valid_ip(ip):
                 errors.append({"record_index": idx, "error": f"Invalid or missing source IP address: '{ip}'"})
                 continue
 
-            raw_time = get_col(row, "timestamp", "time", "event_time", "datetime")
-            event_time = normalize_timestamp(raw_time)
-
             attack = get_col(row, "attack", "attack_type", "event_type", "category", "signature", default="Security Event")
             category = get_col(row, "category", default="Authentication" if "auth" in attack.lower() or "login" in attack.lower() else "Security Telemetry")
-            username = get_col(row, "username", "user", "target_user", "account", default="unknown")
+            username = get_col(row, "username", "user", "target_user", "account", default="")
             dest_ip = get_col(row, "dest_ip", "dst_ip", "resp_h", default="")
-            hostname = get_col(row, "hostname", "host", "computer", default="sec-host")
+            hostname = get_col(row, "hostname", "host", "computer", default="")
             outcome = normalize_outcome(get_col(row, "outcome", "status", "result", default="unknown"))
+            source_port = get_col(row, "source_port", "src_port", "sport", default="") or None
+            dest_port = get_col(row, "dest_port", "dst_port", "dport", default="") or None
+            source_event_id = get_col(row, "event_id", "id", "record_id", default="") or None
 
             # Derive risk score and severity
             risk_raw = get_col(row, "risk", "risk_score", "score")
@@ -311,20 +397,40 @@ class IngestionParser:
 
             behavior = get_col(row, "behavior", "details", "desc", default=f"{attack} from {ip}")
 
+            # Bounded raw payload & integrity hash
+            raw_payload = json.dumps(row, sort_keys=True)[:MAX_RAW_PAYLOAD_SIZE]
+            raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+
+            field_provenance = {
+                "source_ip": "observed" if ip else "unavailable",
+                "dest_ip": "observed" if dest_ip else "unavailable",
+                "username": "observed" if username else "unavailable",
+                "hostname": "observed" if hostname else "unavailable",
+                "event_time": "observed"
+            }
+
             record = {
                 "source_type": "canonical_csv",
                 "event_time": event_time,
+                "original_timestamp": orig_time,
+                "original_timezone": orig_tz,
                 "category": category,
                 "attack_type": attack,
-                "username": username,
+                "username": username or "unknown",
                 "source_ip": ip,
                 "dest_ip": dest_ip or None,
-                "hostname": hostname,
+                "hostname": hostname or None,
                 "outcome": outcome,
                 "severity": severity,
                 "risk_score": risk,
                 "behavior": behavior,
-                "source_record_ref": f"line_{idx}",
+                "source_port": source_port,
+                "dest_port": dest_port,
+                "source_event_id": source_event_id,
+                "source_record_ref": f"csv_row_{idx}",
+                "field_provenance": field_provenance,
+                "raw_payload": raw_payload,
+                "raw_hash": raw_hash,
                 "metadata": {k: v for k, v in row.items() if v}
             }
             records.append(record)
@@ -342,7 +448,7 @@ class IngestionParser:
         if clean.startswith("[") and clean.endswith("]"):
             try:
                 items = json.loads(clean)
-                lines = [(i + 1, item) for i, item in enumerate(items)]
+                lines = [(i + 1, item, json.dumps(item, sort_keys=True)) for i, item in enumerate(items)]
             except Exception as e:
                 return [], [{"record_index": 0, "error": f"Invalid JSON array: {str(e)}"}]
         else:
@@ -353,11 +459,11 @@ class IngestionParser:
                 if not line_str:
                     continue
                 try:
-                    lines.append((idx, json.loads(line_str)))
+                    lines.append((idx, json.loads(line_str), line_str))
                 except Exception as e:
                     errors.append({"record_index": idx, "error": f"Malformed JSON: {str(e)}", "raw": line_str[:60]})
 
-        for idx, item in lines:
+        for idx, item, raw_text in lines:
             if idx > MAX_RECORDS_PER_BATCH:
                 errors.append({"record_index": idx, "error": f"Batch limit exceeded (maximum {MAX_RECORDS_PER_BATCH} records)"})
                 break
@@ -366,18 +472,28 @@ class IngestionParser:
                 errors.append({"record_index": idx, "error": "Record is not a JSON object"})
                 continue
 
+            # Strict timestamp normalization
+            raw_time = item.get("timestamp") or item.get("time") or item.get("event_time")
+            try:
+                event_time, orig_time, orig_tz = normalize_timestamp_strict(raw_time)
+            except TimestampNormalizationError as e:
+                errors.append({"record_index": idx, "error": f"Invalid or missing timestamp: {str(e)}"})
+                continue
+
             ip = item.get("source_ip") or item.get("ip") or item.get("src_ip") or item.get("client_ip")
             if not ip or not is_valid_ip(str(ip)):
                 errors.append({"record_index": idx, "error": f"Invalid or missing source IP address: '{ip}'"})
                 continue
 
-            event_time = normalize_timestamp(item.get("timestamp") or item.get("time") or item.get("event_time"))
             attack = str(item.get("attack") or item.get("attack_type") or item.get("event_type") or "Security Alert")
             category = str(item.get("category") or "Security Telemetry")
-            username = str(item.get("username") or item.get("user") or "unknown")
-            dest_ip = str(item.get("dest_ip") or item.get("dst_ip") or "")
-            hostname = str(item.get("hostname") or item.get("host") or "sec-host")
+            username = item.get("username") or item.get("user")
+            dest_ip = item.get("dest_ip") or item.get("dst_ip")
+            hostname = item.get("hostname") or item.get("host")
             outcome = normalize_outcome(item.get("outcome") or item.get("status"))
+            source_port = str(item.get("source_port") or item.get("src_port") or "") or None
+            dest_port = str(item.get("dest_port") or item.get("dst_port") or "") or None
+            source_event_id = str(item.get("id") or item.get("event_id") or "") or None
 
             risk_val = item.get("risk") or item.get("risk_score")
             severity_val = item.get("severity")
@@ -389,20 +505,39 @@ class IngestionParser:
 
             behavior = str(item.get("behavior") or item.get("details") or f"{attack} observed")
 
+            raw_payload = raw_text[:MAX_RAW_PAYLOAD_SIZE]
+            raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+
+            field_provenance = {
+                "source_ip": "observed" if ip else "unavailable",
+                "dest_ip": "observed" if dest_ip else "unavailable",
+                "username": "observed" if username else "unavailable",
+                "hostname": "observed" if hostname else "unavailable",
+                "event_time": "observed"
+            }
+
             records.append({
                 "source_type": "ndjson",
                 "event_time": event_time,
+                "original_timestamp": orig_time,
+                "original_timezone": orig_tz,
                 "category": category,
                 "attack_type": attack,
-                "username": username,
+                "username": str(username).strip() if username else "unknown",
                 "source_ip": str(ip).strip(),
-                "dest_ip": dest_ip.strip() if dest_ip else None,
-                "hostname": hostname.strip(),
+                "dest_ip": str(dest_ip).strip() if dest_ip else None,
+                "hostname": str(hostname).strip() if hostname else None,
                 "outcome": outcome,
                 "severity": severity,
                 "risk_score": risk,
                 "behavior": behavior,
-                "source_record_ref": f"line_{idx}",
+                "source_port": source_port,
+                "dest_port": dest_port,
+                "source_event_id": source_event_id,
+                "source_record_ref": f"ndjson_line_{idx}",
+                "field_provenance": field_provenance,
+                "raw_payload": raw_payload,
+                "raw_hash": raw_hash,
                 "metadata": item
             })
 
@@ -413,6 +548,7 @@ class IngestionParser:
         """
         Parse Windows Security Event Log (JSON or NDJSON) for Event IDs 4624 & 4625.
         Extracts EventID, SystemTime, Computer, TargetUserName, IpAddress, LogonType, SubStatus.
+        Strictly avoids fabricating IPs, hostnames, usernames, or destinations.
         """
         records = []
         errors = []
@@ -422,12 +558,12 @@ class IngestionParser:
         items = []
         if clean.startswith("[") and clean.endswith("]"):
             try:
-                items = [(i + 1, item) for i, item in enumerate(json.loads(clean))]
+                items = [(i + 1, item, json.dumps(item, sort_keys=True)) for i, item in enumerate(json.loads(clean))]
             except Exception as e:
                 return [], [{"record_index": 0, "error": f"Invalid Windows JSON: {str(e)}"}]
         elif clean.startswith("{") and clean.endswith("}") and "\n{" not in clean:
             try:
-                items = [(1, json.loads(clean))]
+                items = [(1, json.loads(clean), clean)]
             except Exception as e:
                 return [], [{"record_index": 1, "error": f"Invalid Windows JSON: {str(e)}"}]
         else:
@@ -436,89 +572,117 @@ class IngestionParser:
                 if not line_str:
                     continue
                 try:
-                    items.append((idx, json.loads(line_str)))
+                    items.append((idx, json.loads(line_str), line_str))
                 except Exception as e:
                     errors.append({"record_index": idx, "error": f"Malformed Windows event JSON: {str(e)}"})
 
-        for idx, obj in items:
+        for idx, obj, raw_text in items:
             if idx > MAX_RECORDS_PER_BATCH:
                 errors.append({"record_index": idx, "error": f"Batch limit exceeded (maximum {MAX_RECORDS_PER_BATCH} records)"})
                 break
 
-            # Handle wrapped Event structure: {"Event": {"System": {...}, "EventData": {...}}} or flat
             event_obj = obj.get("Event", obj)
             system = event_obj.get("System", {})
             event_data = event_obj.get("EventData", {})
 
             event_id = str(system.get("EventID", event_obj.get("EventID", "")))
             if not event_id:
-                # Try finding event_id in event_data
                 event_id = str(event_data.get("EventID", ""))
 
             if event_id not in ("4624", "4625"):
                 errors.append({"record_index": idx, "error": f"Unsupported Windows EventID '{event_id}'. Only 4624 (Success) and 4625 (Failure) are supported."})
                 continue
 
-            # Extract SystemTime
+            # Strict SystemTime normalization
             time_created = system.get("TimeCreated", {})
             if isinstance(time_created, dict):
                 raw_time = time_created.get("@SystemTime") or time_created.get("SystemTime")
             else:
                 raw_time = time_created or event_obj.get("TimeCreated") or event_obj.get("timestamp")
-            event_time = normalize_timestamp(raw_time)
 
-            # Computer/Hostname
-            hostname = system.get("Computer") or event_obj.get("Computer") or "WIN-SRV-DC01"
-
-            # Target user
-            username = event_data.get("TargetUserName") or event_obj.get("TargetUserName") or event_obj.get("username") or "SYSTEM"
-
-            # IP Address
-            ip = event_data.get("IpAddress") or event_obj.get("IpAddress") or event_obj.get("source_ip")
-            if not ip or ip in ("-", "127.0.0.1", "::1", ""):
-                # If local or absent, assign standard local gateway or computer IP
-                ip = "10.0.0.15"
-
-            if not is_valid_ip(str(ip)):
-                errors.append({"record_index": idx, "error": f"Invalid IP address in Windows event: '{ip}'"})
+            try:
+                event_time, orig_time, orig_tz = normalize_timestamp_strict(raw_time)
+            except TimestampNormalizationError as e:
+                errors.append({"record_index": idx, "error": f"Invalid or missing Windows SystemTime: {str(e)}"})
                 continue
 
-            logon_type = event_data.get("LogonType") or event_obj.get("LogonType") or "3"
+            # Computer/Hostname - never fabricate default
+            hostname = system.get("Computer") or event_obj.get("Computer") or None
+
+            # Target user - never fabricate default
+            username = event_data.get("TargetUserName") or event_obj.get("TargetUserName") or event_obj.get("username") or None
+
+            # IP Address extraction without fabrication (remove 10.0.0.15 fallback)
+            raw_ip = event_data.get("IpAddress") or event_obj.get("IpAddress") or event_obj.get("source_ip")
+            ip = None
+            if raw_ip and str(raw_ip).strip() not in ("-", ""):
+                ip_clean = str(raw_ip).strip()
+                if is_valid_ip(ip_clean):
+                    ip = ip_clean
+                else:
+                    errors.append({"record_index": idx, "error": f"Invalid IP address in Windows event: '{ip_clean}'"})
+                    continue
+
+            # Where schema requires non-null source IP, represent unobserved local console logons as 'unknown'
+            source_ip_val = ip if ip else "unknown"
+
+            logon_type = str(event_data.get("LogonType") or event_obj.get("LogonType") or "")
             sub_status = event_data.get("SubStatus") or event_obj.get("SubStatus") or ""
+            source_port = str(event_data.get("IpPort") or "") or None
+            source_event_id = str(system.get("EventRecordID") or "") or None
 
             if event_id == "4625":
                 outcome = "failure"
                 attack = "Logon Failure (Windows 4625)"
                 risk = 80
                 severity = "high"
-                behavior = f"Failed logon for {username} via LogonType {logon_type} (SubStatus: {sub_status or '0xC000006A'})"
+                behavior = f"Failed logon for {username or 'unknown'} via LogonType {logon_type or 'unknown'} (SubStatus: {sub_status or '0xC000006A'})"
             else:  # 4624
                 outcome = "success"
                 attack = "Logon Success (Windows 4624)"
                 risk = 15
                 severity = "low"
-                behavior = f"Successful logon for {username} via LogonType {logon_type}"
+                behavior = f"Successful logon for {username or 'unknown'} via LogonType {logon_type or 'unknown'}"
+
+            raw_payload = raw_text[:MAX_RAW_PAYLOAD_SIZE]
+            raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+
+            field_provenance = {
+                "source_ip": "observed" if ip else "unavailable",
+                "dest_ip": "unavailable",
+                "username": "observed" if username else "unavailable",
+                "hostname": "observed" if hostname else "unavailable",
+                "event_time": "observed"
+            }
 
             records.append({
                 "source_type": "windows_event",
                 "event_time": event_time,
+                "original_timestamp": orig_time,
+                "original_timezone": orig_tz,
                 "category": "Authentication",
                 "attack_type": attack,
-                "username": username,
-                "source_ip": str(ip).strip(),
-                "dest_ip": "10.0.0.1",
-                "hostname": str(hostname).strip(),
+                "username": username or "unknown",
+                "source_ip": source_ip_val,
+                "dest_ip": None,  # Strictly NO fabricated destination 10.0.0.1
+                "hostname": str(hostname).strip() if hostname else None,
                 "outcome": outcome,
                 "severity": severity,
                 "risk_score": risk,
                 "behavior": behavior,
-                "source_record_ref": f"EventID_{event_id}_line_{idx}",
+                "source_port": source_port,
+                "dest_port": None,
+                "source_event_id": source_event_id,
+                "source_record_ref": f"EventID_{event_id}_record_{source_event_id or idx}",
+                "field_provenance": field_provenance,
+                "raw_payload": raw_payload,
+                "raw_hash": raw_hash,
                 "metadata": {
                     "EventID": event_id,
                     "LogonType": logon_type,
                     "SubStatus": sub_status,
-                    "TargetDomainName": event_data.get("TargetDomainName", "CORP"),
-                    "WorkstationName": event_data.get("WorkstationName", hostname)
+                    "TargetDomainName": event_data.get("TargetDomainName"),
+                    "WorkstationName": event_data.get("WorkstationName")
                 }
             })
 
@@ -529,6 +693,8 @@ class IngestionParser:
         """
         Parse Linux SSH authentication logs (syslog auth.log format).
         Extracts timestamp, host, username, source IP, port, and authentication outcome.
+        Classifies single failure as SSH Login Attempt, not premature confirmed brute force.
+        Never fabricates destination IPs or hostnames.
         """
         records = []
         errors = []
@@ -550,51 +716,76 @@ class IngestionParser:
                     matched = True
                     gd = m.groupdict()
                     raw_time = gd.get("timestamp")
-                    event_time = normalize_timestamp(raw_time)
-                    hostname = gd.get("hostname") or "linux-bastion"
-                    username = gd.get("username") or "root"
+                    try:
+                        event_time, orig_time, orig_tz = normalize_timestamp_strict(raw_time)
+                    except TimestampNormalizationError as e:
+                        errors.append({"record_index": idx, "error": f"Invalid or missing SSH syslog timestamp: {str(e)}"})
+                        break
+
+                    hostname = gd.get("hostname") or None
+                    username = gd.get("username") or None
                     ip = gd.get("ip")
 
                     if not ip or not is_valid_ip(ip):
                         errors.append({"record_index": idx, "error": f"Invalid IP in SSH log: '{ip}'"})
                         break
 
-                    port = gd.get("port") or "22"
+                    port = gd.get("port")
                     lower_line = clean_line.lower()
 
+                    # Do not classify single failure as confirmed brute force!
                     if "failed password" in lower_line or "invalid user" in lower_line:
                         outcome = "failure"
-                        attack = "SSH Brute Force Attempt"
+                        attack = "SSH Login Attempt"
                         risk = 75
                         severity = "high"
-                        behavior = f"SSH authentication failure for user {username} from port {port}"
+                        behavior = f"SSH authentication failure for user {username or 'unknown'} from port {port or 'unknown'}"
                     elif "accepted" in lower_line:
                         outcome = "success"
                         attack = "SSH Logon Success"
                         risk = 20
                         severity = "low"
-                        behavior = f"SSH session established for {username} from port {port}"
+                        behavior = f"SSH session established for {username or 'unknown'} from port {port or 'unknown'}"
                     else:
                         outcome = "blocked"
                         attack = "SSH Connection Closed"
                         risk = 40
                         severity = "medium"
-                        behavior = f"SSH connection terminated during authentication for {username}"
+                        behavior = f"SSH connection terminated during authentication for {username or 'unknown'}"
+
+                    raw_payload = clean_line[:MAX_RAW_PAYLOAD_SIZE]
+                    raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+
+                    field_provenance = {
+                        "source_ip": "observed",
+                        "dest_ip": "unavailable",
+                        "username": "observed" if username else "unavailable",
+                        "hostname": "observed" if hostname else "unavailable",
+                        "event_time": "observed" if orig_tz != "local_syslog" else "inferred_year"
+                    }
 
                     records.append({
                         "source_type": "linux_ssh",
                         "event_time": event_time,
+                        "original_timestamp": orig_time,
+                        "original_timezone": orig_tz,
                         "category": "Authentication",
                         "attack_type": attack,
-                        "username": username,
+                        "username": username or "unknown",
                         "source_ip": ip,
-                        "dest_ip": "192.168.1.10",
+                        "dest_ip": None,  # Strictly NO fabricated destination 192.168.1.10
                         "hostname": hostname,
                         "outcome": outcome,
                         "severity": severity,
                         "risk_score": risk,
                         "behavior": behavior,
+                        "source_port": str(port) if port else None,
+                        "dest_port": "22",
+                        "source_event_id": None,
                         "source_record_ref": f"syslog_line_{idx}",
+                        "field_provenance": field_provenance,
+                        "raw_payload": raw_payload,
+                        "raw_hash": raw_hash,
                         "metadata": {
                             "port": port,
                             "raw_message": clean_line
@@ -612,6 +803,7 @@ class IngestionParser:
         """
         Parse Zeek connection logs (conn.log in JSON format).
         Extracts ts, id.orig_h, id.resp_h, id.resp_p, proto, service, conn_state, duration.
+        Never fabricates usernames ('network_flow') or hostnames ('zeek-sensor-01').
         """
         records = []
         errors = []
@@ -620,7 +812,7 @@ class IngestionParser:
         items = []
         if clean.startswith("[") and clean.endswith("]"):
             try:
-                items = [(i + 1, item) for i, item in enumerate(json.loads(clean))]
+                items = [(i + 1, item, json.dumps(item, sort_keys=True)) for i, item in enumerate(json.loads(clean))]
             except Exception as e:
                 return [], [{"record_index": 0, "error": f"Invalid Zeek JSON array: {str(e)}"}]
         else:
@@ -629,11 +821,11 @@ class IngestionParser:
                 if not line_str:
                     continue
                 try:
-                    items.append((idx, json.loads(line_str)))
+                    items.append((idx, json.loads(line_str), line_str))
                 except Exception as e:
                     errors.append({"record_index": idx, "error": f"Malformed Zeek JSON: {str(e)}"})
 
-        for idx, obj in items:
+        for idx, obj, raw_text in items:
             if idx > MAX_RECORDS_PER_BATCH:
                 errors.append({"record_index": idx, "error": f"Batch limit exceeded (maximum {MAX_RECORDS_PER_BATCH} records)"})
                 break
@@ -642,33 +834,34 @@ class IngestionParser:
                 errors.append({"record_index": idx, "error": "Zeek record is not an object"})
                 continue
 
-            # Zeek id struct or flat
             id_struct = obj.get("id", {})
             orig_h = id_struct.get("orig_h") or obj.get("id.orig_h") or obj.get("orig_h")
             resp_h = id_struct.get("resp_h") or obj.get("id.resp_h") or obj.get("resp_h")
+            orig_p = id_struct.get("orig_p") or obj.get("id.orig_p") or obj.get("orig_p")
             resp_p = id_struct.get("resp_p") or obj.get("id.resp_p") or obj.get("resp_p")
+            uid = obj.get("uid")
 
             if not orig_h or not is_valid_ip(str(orig_h)):
                 errors.append({"record_index": idx, "error": f"Invalid source IP in Zeek log: '{orig_h}'"})
                 continue
 
             raw_time = obj.get("ts") or obj.get("timestamp")
-            event_time = normalize_timestamp(raw_time)
+            try:
+                event_time, orig_time, orig_tz = normalize_timestamp_strict(raw_time)
+            except TimestampNormalizationError as e:
+                errors.append({"record_index": idx, "error": f"Invalid or missing Zeek timestamp: {str(e)}"})
+                continue
 
             proto = str(obj.get("proto") or "tcp").lower()
             service = str(obj.get("service") or "-").lower()
             conn_state = str(obj.get("conn_state") or "SF").upper()
 
-            # Analyze connection state
-            # S0: Connection attempt seen, no reply (e.g. port scan)
-            # REJ: Connection attempt rejected
-            # SF: Normal establishment and termination
             if conn_state in ("S0", "S1", "RSTOS0"):
                 outcome = "blocked"
                 attack = "Port Scan / Recon Probe (Zeek S0)"
                 risk = 65
                 severity = "high"
-                behavior = f"Incomplete {proto} handshake to port {resp_p} (State: {conn_state})"
+                behavior = f"Incomplete {proto} handshake to port {resp_p or 'unknown'} (State: {conn_state})"
             elif conn_state in ("REJ", "RSTR"):
                 outcome = "failure"
                 attack = "Connection Rejected (Zeek REJ)"
@@ -682,20 +875,39 @@ class IngestionParser:
                 severity = "info"
                 behavior = f"Completed {proto} flow ({conn_state}) with {resp_h}:{resp_p}"
 
+            raw_payload = raw_text[:MAX_RAW_PAYLOAD_SIZE]
+            raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+
+            field_provenance = {
+                "source_ip": "observed" if orig_h else "unavailable",
+                "dest_ip": "observed" if resp_h else "unavailable",
+                "username": "unavailable",
+                "hostname": "unavailable",
+                "event_time": "observed"
+            }
+
             records.append({
                 "source_type": "zeek_conn",
                 "event_time": event_time,
+                "original_timestamp": orig_time,
+                "original_timezone": orig_tz,
                 "category": "Network Connection",
                 "attack_type": attack,
-                "username": "network_flow",
+                "username": None,  # Strictly NO fabricated username 'network_flow'
                 "source_ip": str(orig_h).strip(),
                 "dest_ip": str(resp_h).strip() if resp_h else None,
-                "hostname": f"zeek-sensor-01",
+                "hostname": None,  # Strictly NO fabricated hostname 'zeek-sensor-01'
                 "outcome": outcome,
                 "severity": severity,
                 "risk_score": risk,
                 "behavior": behavior,
-                "source_record_ref": f"zeek_conn_line_{idx}",
+                "source_port": str(orig_p) if orig_p else None,
+                "dest_port": str(resp_p) if resp_p else None,
+                "source_event_id": str(uid) if uid else None,
+                "source_record_ref": f"zeek_uid_{uid}" if uid else f"zeek_line_{idx}",
+                "field_provenance": field_provenance,
+                "raw_payload": raw_payload,
+                "raw_hash": raw_hash,
                 "metadata": {
                     "proto": proto,
                     "service": service,
@@ -733,4 +945,3 @@ class IngestionParser:
             return [], [{"record_index": 0, "error": f"Unsupported log format: '{format_name}'"}], fmt
 
         return records, errors, fmt
-

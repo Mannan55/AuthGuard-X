@@ -1834,13 +1834,30 @@
         </div>
 
         <div class="card" style="padding: var(--space-3); margin-bottom: var(--space-4);">
-          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Integrity Fingerprint (SHA-256)</div>
-          <div id="event-detail-fingerprint" class="font-mono text-xs text-muted" style="word-break: break-all;">—</div>
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Forensic Integrity &amp; Provenance</div>
+          <div style="margin-bottom: 6px; font-size: var(--text-xs);">
+            <strong>Original Timestamp:</strong> <span id="event-detail-original-time" class="font-mono text-cyan">—</span>
+            <span id="event-detail-original-tz" class="badge badge-subtle" style="margin-left: 6px;">—</span>
+          </div>
+          <div style="margin-bottom: 6px; font-size: var(--text-xs);">
+            <strong>Field Provenance:</strong> <span id="event-detail-field-provenance" class="font-mono text-xs">—</span>
+          </div>
+          <div style="margin-bottom: 6px; font-size: var(--text-xs);">
+            <strong>Deduplication Fingerprint:</strong> <span id="event-detail-fingerprint" class="font-mono text-xs text-muted" style="word-break: break-all;">—</span>
+          </div>
+          <div style="font-size: var(--text-xs);">
+            <strong>Raw Payload Integrity Hash (SHA-256):</strong> <span id="event-detail-raw-hash" class="font-mono text-xs text-cyan" style="word-break: break-all;">—</span>
+          </div>
+        </div>
+
+        <div style="margin-bottom: var(--space-3);">
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Preserved Raw Source Payload</div>
+          <pre id="event-detail-raw-payload" class="card font-mono text-xs" style="padding: var(--space-3); background: var(--color-surface); max-height: 140px; overflow-y: auto; color: var(--color-text-secondary); word-break: break-all; white-space: pre-wrap;"></pre>
         </div>
 
         <div>
-          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Raw Telemetry Metadata</div>
-          <pre id="event-detail-raw-metadata" class="card font-mono text-xs" style="padding: var(--space-3); background: var(--color-surface); max-height: 180px; overflow-y: auto; color: var(--color-text-secondary);"></pre>
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Parsed Extraction Metadata</div>
+          <pre id="event-detail-raw-metadata" class="card font-mono text-xs" style="padding: var(--space-3); background: var(--color-surface); max-height: 140px; overflow-y: auto; color: var(--color-text-secondary);"></pre>
         </div>
       </div>
       <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">

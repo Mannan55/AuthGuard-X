@@ -344,7 +344,30 @@
         document.getElementById('event-detail-user').textContent = evt.username || 'unknown';
         document.getElementById('event-detail-ip').textContent = evt.source_ip;
         document.getElementById('event-detail-dest-ip').textContent = evt.dest_ip || '—';
-        document.getElementById('event-detail-host').textContent = evt.hostname || 'sec-host';
+        document.getElementById('event-detail-host').textContent = evt.hostname || '—';
+
+        const origTimeEl = document.getElementById('event-detail-original-time');
+        if (origTimeEl) origTimeEl.textContent = evt.original_timestamp || evt.event_time || '—';
+
+        const origTzEl = document.getElementById('event-detail-original-tz');
+        if (origTzEl) origTzEl.textContent = evt.original_timezone || 'UTC';
+
+        const rawHashEl = document.getElementById('event-detail-raw-hash');
+        if (rawHashEl) rawHashEl.textContent = evt.raw_hash || '—';
+
+        const provEl = document.getElementById('event-detail-field-provenance');
+        if (provEl) {
+          const p = evt.field_provenance || {};
+          provEl.innerHTML = Object.entries(p).map(([k, v]) => {
+            const badgeClass = v === 'observed' ? 'text-success' : (v === 'inferred' || v === 'inferred_year' ? 'text-amber' : 'text-muted');
+            return `<span style="margin-right: 8px;"><strong>${k}:</strong> <span class="${badgeClass}">${v}</span></span>`;
+          }).join('') || '—';
+        }
+
+        const rawPayloadPre = document.getElementById('event-detail-raw-payload');
+        if (rawPayloadPre) {
+          rawPayloadPre.textContent = evt.raw_payload || '—';
+        }
 
         const outcomeEl = document.getElementById('event-detail-outcome');
         outcomeEl.innerHTML = this.getOutcomeBadge(evt.outcome);
@@ -470,6 +493,37 @@
             banner.style.background = 'rgba(56, 189, 248, 0.15)';
             banner.style.color = 'var(--color-cyan)';
             banner.innerHTML = `<strong>Dry Run Succeeded:</strong> Parsed ${result.total_records_found} valid records (${result.parse_errors_count} parse errors). No changes written to database.`;
+          } else if (result.detection_status === 'failed') {
+            banner.style.background = 'rgba(245, 158, 11, 0.15)';
+            banner.style.color = 'var(--color-amber)';
+            banner.innerHTML = `
+              <strong>Import Saved (Batch ${result.batch_id}), Detection Failed:</strong> ${this.escapeHtml(result.summary)}
+              <div style="margin-top: 8px;">
+                <button class="btn btn-sm btn-secondary" id="btn-retry-batch-detection">Retry Detection Pipeline &rarr;</button>
+              </div>
+            `;
+            const retryBtn = document.getElementById('btn-retry-batch-detection');
+            if (retryBtn) {
+              retryBtn.addEventListener('click', async () => {
+                retryBtn.disabled = true;
+                retryBtn.textContent = 'Retrying...';
+                try {
+                  const retryRes = await window.API.ingestion.retryDetection(result.batch_id);
+                  banner.style.background = 'rgba(16, 185, 129, 0.15)';
+                  banner.style.color = 'var(--color-success)';
+                  banner.innerHTML = `<strong>Detection Complete:</strong> ${this.escapeHtml(retryRes.message)}`;
+                  this.loadEvents();
+                  if (window.UI && window.UI.showToast) {
+                    window.UI.showToast(retryRes.message, 'success');
+                  }
+                } catch (e) {
+                  banner.style.background = 'rgba(239, 68, 68, 0.15)';
+                  banner.style.color = 'var(--color-danger)';
+                  banner.textContent = `Retry failed: ${e.message}`;
+                }
+              });
+            }
+            this.loadEvents();
           } else {
             banner.style.background = 'rgba(16, 185, 129, 0.15)';
             banner.style.color = 'var(--color-success)';

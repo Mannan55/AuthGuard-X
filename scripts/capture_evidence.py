@@ -1241,20 +1241,26 @@ def run_full_verification():
                 const detailModal = document.getElementById('modal-event-detail');
                 const attackText = document.getElementById('event-detail-attack') ? document.getElementById('event-detail-attack').textContent : '';
                 const fpText = document.getElementById('event-detail-fingerprint') ? document.getElementById('event-detail-fingerprint').textContent : '';
+                const rawHashText = document.getElementById('event-detail-raw-hash') ? document.getElementById('event-detail-raw-hash').textContent : '';
+                const origTimeText = document.getElementById('event-detail-original-time') ? document.getElementById('event-detail-original-time').textContent : '';
 
                 return {
                     success: true,
                     modalVisible: detailModal ? (detailModal.classList.contains('show') || detailModal.getAttribute('aria-hidden') === 'false') : false,
                     attackText,
-                    hasFingerprint: fpText.length >= 32
+                    hasFingerprint: fpText.length >= 32,
+                    hasRawHash: rawHashText.length >= 32,
+                    hasOriginalTime: origTimeText.length > 0 && origTimeText !== '—'
                 };
             })()
         """)
         assert event_inspect_result["success"], f"Event inspection failed: {event_inspect_result}"
         assert event_inspect_result["hasFingerprint"], "Event detail must include SHA-256 integrity fingerprint"
+        assert event_inspect_result["hasRawHash"], "Event detail must include SHA-256 raw payload hash"
+        assert event_inspect_result["hasOriginalTime"], "Event detail must include original timestamp"
         browser.screenshot("19_event_detail_modal.png")
         passed_assertions += 1
-        print("  -> Passed: Normalized security event detail modal and integrity fingerprint verified.")
+        print("  -> Passed: Normalized security event detail modal, raw payload hash, and forensic integrity verified.")
 
         # ── Assertion 28: Event Explorer Responsive Viewport Assertions (390px, 768px, 1440px, 1920px) ──
         print("\n[Assert 28] Verifying Event Explorer Breakpoints (390px, 768px, 1440px, 1920px)...")
@@ -1297,8 +1303,47 @@ def run_full_verification():
         passed_assertions += 1
         print("  -> Passed: Event Explorer zero horizontal overflow confirmed across all responsive breakpoints.")
 
+        # ── Assertion 29: End-to-End Import -> Normalize -> Detect -> Investigate ──
+        print("\n[Assert 29] Verifying Journey: Import -> Normalize -> Detect -> Investigate...")
+        browser.resize(1440, 900)
+        browser.evaluate("""
+            (() => {
+                if (window.switchView) window.switchView('event-explorer');
+            })()
+        """)
+        time.sleep(0.5)
+        journey_result = browser.evaluate("""
+            (async () => {
+                const tbody = document.getElementById('security-events-tbody');
+                const inspectBtn = tbody ? tbody.querySelector('.btn-inspect-event') : null;
+                if (!inspectBtn) return { success: false, reason: 'No inspect button found' };
+                inspectBtn.click();
+                await new Promise(r => setTimeout(r, 600));
+
+                const jumpBtn = document.getElementById('btn-jump-investigate');
+                if (!jumpBtn) return { success: false, reason: 'Jump to investigation button not found' };
+                jumpBtn.click();
+                await new Promise(r => setTimeout(r, 1000));
+
+                const invView = document.getElementById('view-investigation');
+                const isInvVisible = invView && (invView.classList.contains('active') || invView.style.display !== 'none');
+                const caseIdEl = document.getElementById('case-view-id');
+                const currentCaseId = caseIdEl ? caseIdEl.textContent.trim() : '';
+
+                return {
+                    success: isInvVisible && currentCaseId.length > 1 && currentCaseId !== '#-',
+                    isInvVisible,
+                    currentCaseId
+                };
+            })()
+        """)
+        assert journey_result["success"], f"End-to-end journey failed: {journey_result}"
+        browser.screenshot("24_event_jump_investigation.png")
+        passed_assertions += 1
+        print(f"  -> Passed: End-to-end Import -> Normalize -> Detect -> Investigate journey verified (Case {journey_result['currentCaseId']}).")
+
         print("\n========================================================")
-        print(f"ALL REAL-BROWSER ASSERTIONS PASSED ({passed_assertions}/28)")
+        print(f"ALL REAL-BROWSER ASSERTIONS PASSED ({passed_assertions}/29)")
         print("Updated evidence screenshots saved to docs/screenshots/")
         print("========================================================")
 
