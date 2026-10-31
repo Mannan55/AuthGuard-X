@@ -15,6 +15,7 @@
       const data = await window.API.metrics.get();
       renderKPIs(data);
       renderSeverityBreakdown(data);
+      loadPriorities();
 
       // Sprint 2: Also update case pipeline / queue badge
       try {
@@ -31,6 +32,28 @@
     } catch (err) {
       console.warn('[Dashboard] Failed to load metrics:', err);
     }
+  }
+
+  async function loadPriorities() {
+    const container = document.getElementById('overview-priorities');
+    if (!container) return;
+    try {
+      const response = await window.API.incidents.list({page: 1, per_page: 100});
+      const rows = (Array.isArray(response) ? response : response.incidents || [])
+        .filter(row => !row.resolved).sort((a,b) => b.risk - a.risk).slice(0,5);
+      container.replaceChildren();
+      if (!rows.length) { const empty = document.createElement('p'); empty.className = 'priority-empty'; empty.textContent = 'No unresolved incidents in this sample. Run a training scenario or inspect the full incident feed.'; container.append(empty); }
+      rows.forEach((row, index) => {
+        const link = document.createElement('a'); link.className = 'priority-row'; link.href = `#investigation?id=${Number(row.id)}`;
+        const rank = document.createElement('span'); rank.className = 'priority-rank'; rank.textContent = String(index + 1).padStart(2,'0');
+        const details = document.createElement('span'); details.className = 'priority-details';
+        const title = document.createElement('strong'); title.textContent = row.attack || 'Unclassified incident';
+        const context = document.createElement('small'); context.textContent = `${row.ip || 'Unknown IP'} · ${row.is_simulated ? 'Simulated' : 'System / audit'}`;
+        details.append(title, context);
+        const risk = document.createElement('span'); risk.className = 'priority-risk'; risk.textContent = row.risk; risk.title = 'Recorded risk score';
+        link.append(rank, details, risk); container.append(link);
+      });
+    } catch (_) { container.textContent = 'Incident priorities unavailable. Use the incident feed to retry.'; }
   }
 
   function renderKPIs(metrics) {
@@ -58,6 +81,20 @@
       }
     }
 
+    for (const [id, value] of Object.entries({
+      'metric-resolved': metrics.resolved_incidents || 0,
+      'overview-map-count': metrics.total_incidents || 0,
+      'provenance-total': metrics.total_incidents || 0,
+      'provenance-sim': metrics.simulated_count || 0,
+      'provenance-audit': metrics.telemetry_count || 0
+    })) { const el = document.getElementById(id); if (el) el.textContent = value; }
+    const ring = document.getElementById('provenance-ring');
+    if (ring) {
+      const total = metrics.total_incidents || 0;
+      const pct = total ? (metrics.simulated_count || 0) / total * 100 : 0;
+      ring.style.background = total ? `conic-gradient(#ef853b ${pct}%, #8561ee 0)` : 'var(--color-border)';
+      ring.setAttribute('aria-label', `${metrics.simulated_count || 0} synthetic and ${metrics.telemetry_count || 0} system or audit records`);
+    }
     // Mini counters
     const simCountEl = document.getElementById('metric-sim-count');
     const teleCountEl = document.getElementById('metric-tele-count');
@@ -110,14 +147,14 @@
           {
             label: 'Incident Risk Severity',
             data: [],
-            borderColor: '#38bdf8',
-            backgroundColor: 'rgba(56, 189, 248, 0.08)',
+            borderColor: '#ef853b',
+            backgroundColor: 'rgba(239, 133, 59, 0.08)',
             borderWidth: 2,
             tension: 0.35,
             fill: true,
             pointRadius: 3,
             pointHoverRadius: 6,
-            pointBackgroundColor: '#38bdf8'
+            pointBackgroundColor: '#ef853b'
           }
         ]
       },
