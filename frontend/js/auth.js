@@ -59,12 +59,8 @@
 
     // Show development demo credentials helper if available
     const demoBox = document.getElementById('demo-credentials-box');
-    if (sessionData && sessionData.demo_credentials) {
+    if (sessionData && (sessionData.demo_credentials || sessionData.demo_accounts)) {
       cachedDemoCreds = sessionData.demo_credentials;
-      const userEl = document.getElementById('demo-user-val');
-      const passEl = document.getElementById('demo-pass-val');
-      if (userEl) userEl.textContent = sessionData.demo_credentials.username;
-      if (passEl) passEl.textContent = sessionData.demo_credentials.password;
       if (demoBox) demoBox.style.display = 'block';
     } else if (demoBox) {
       demoBox.style.display = 'none';
@@ -93,10 +89,16 @@
     if (passInput) passInput.value = '';
   }
 
-  function fillDemoCredentials() {
-    if (cachedDemoCreds) {
-      const userIn = document.getElementById('login-username');
-      const passIn = document.getElementById('login-password');
+  function fillDemoCredentials(username, password) {
+    const userIn = document.getElementById('login-username');
+    const passIn = document.getElementById('login-password');
+    const errorEl = document.getElementById('login-error-msg');
+    if (errorEl) errorEl.textContent = '';
+
+    if (username && password) {
+      if (userIn) userIn.value = username;
+      if (passIn) passIn.value = password;
+    } else if (cachedDemoCreds) {
       if (userIn) userIn.value = cachedDemoCreds.username;
       if (passIn) passIn.value = cachedDemoCreds.password;
     }
@@ -172,9 +174,24 @@
       loginForm.addEventListener('submit', handleLogin);
     }
 
+    const demoButtons = document.querySelectorAll('.demo-autofill-btn');
+    demoButtons.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const u = btn.getAttribute('data-user');
+        const p = btn.getAttribute('data-pass');
+        fillDemoCredentials(u, p);
+      });
+    });
+
     const demoFiller = document.getElementById('demo-credentials-box');
     if (demoFiller) {
-      demoFiller.addEventListener('click', fillDemoCredentials);
+      demoFiller.addEventListener('click', (e) => {
+        if (!e.target.closest('.demo-autofill-btn')) {
+          fillDemoCredentials();
+        }
+      });
     }
 
     const logoutBtns = document.querySelectorAll('.logout-trigger');

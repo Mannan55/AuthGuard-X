@@ -38,18 +38,27 @@
       </div>
 
       <!-- Development Demo Credentials Box -->
-      <div id="demo-credentials-box" class="demo-notice" style="display: none;" title="Click to autofill credentials">
+      <div id="demo-credentials-box" class="demo-notice" style="display: none;">
         <div class="demo-notice-header">
           <svg class="icon-sm" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
           </svg>
           <strong>Development Mode Credentials</strong>
         </div>
-        <div class="demo-creds-row">
-          <span>Username: <strong id="demo-user-val" class="highlight-cyan">admin</strong></span>
-          <span>Password: <strong id="demo-pass-val" class="highlight-cyan">••••••••</strong></span>
+        <div style="font-size: var(--text-xs); color: var(--color-text-muted); margin: 6px 0 8px 0;">
+          Select account to autofill credentials:
         </div>
-        <small class="demo-hint">Click anywhere in this box to autofill</small>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button type="button" class="btn btn-outline btn-xs demo-autofill-btn" data-user="admin" data-pass="DemoAdminPassword2026!" style="font-size: 11px; padding: 4px 8px; cursor: pointer;">
+            Admin
+          </button>
+          <button type="button" class="btn btn-outline btn-xs demo-autofill-btn" data-user="analyst_john" data-pass="AnalystPassword2026!" style="font-size: 11px; padding: 4px 8px; cursor: pointer;">
+            Analyst John
+          </button>
+          <button type="button" class="btn btn-outline btn-xs demo-autofill-btn" data-user="analyst_jane" data-pass="AnalystPassword2026!" style="font-size: 11px; padding: 4px 8px; cursor: pointer;">
+            Analyst Jane
+          </button>
+        </div>
       </div>
 
       <!-- Login Form -->
@@ -1016,20 +1025,147 @@
              VIEW: THREAT MAP
              =================================================================== -->
         <section id="view-threat-map" class="view-panel">
-          <div class="card">
-            <div class="card-header">
+          
+          <!-- Threat Map Header & Controls Card -->
+          <div class="card" style="margin-bottom: var(--space-4);">
+            <div class="card-header" style="flex-wrap: wrap; gap: var(--space-3);">
               <div>
-                <h3 class="card-title">Global Threat Origin Vectors</h3>
-                <span class="text-muted" style="font-size: var(--text-xs);">Simulated geospatial threat origin mapping</span>
+                <div style="display: flex; align-items: center; gap: var(--space-2);">
+                  <h3 class="card-title" style="margin: 0;">Global Threat Telemetry Map</h3>
+                  <span id="threat-map-status-pill" class="badge badge-simulated" style="display: inline-flex; align-items: center; gap: 6px;">
+                    <span class="threat-status-pulse"></span>
+                    <span id="threat-status-text">LIVE SIMULATION ACTIVE</span>
+                  </span>
+                </div>
+                <span class="text-muted" style="font-size: var(--text-xs);">Real-time geospatial adversary attack vector projection &amp; trajectory simulation</span>
               </div>
-              <span class="badge badge-simulated">Simulated Data Only</span>
+
+              <!-- Action Toolbar -->
+              <div style="display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center;">
+                <button id="threat-toggle-btn" type="button" class="btn btn-secondary btn-sm" title="Pause or resume live telemetry stream">
+                  <span id="threat-toggle-label">Pause Stream</span>
+                </button>
+                <button id="threat-inject-btn" type="button" class="btn btn-primary btn-sm" title="Inject an immediate simulated attack vector">
+                  Inject Threat Vector
+                </button>
+                <select id="threat-speed-select" class="form-select form-select-sm" style="max-width: 130px;" title="Simulation interval frequency">
+                  <option value="1500">Fast (1.5s)</option>
+                  <option value="2500" selected>Normal (2.5s)</option>
+                  <option value="5000">Slow (5.0s)</option>
+                </select>
+                <select id="threat-scenario-select" class="form-select form-select-sm" style="max-width: 170px;" title="Scenario filter">
+                  <option value="all" selected>All Attack Vectors</option>
+                  <option value="credential">Credential Attacks</option>
+                  <option value="recon">Recon &amp; Probes</option>
+                  <option value="critical">Critical Severities</option>
+                </select>
+                <label class="form-checkbox" style="font-size: var(--text-xs); margin: 0; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;" title="When checked, also writes simulated incidents to the backend database">
+                  <input type="checkbox" id="threat-persist-chk" checked>
+                  <span>Sync to Incidents</span>
+                </label>
+              </div>
             </div>
 
-            <div id="attack-map-canvas" class="attack-map-wrapper">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg" alt="World Map Vector" class="world-map-svg">
+            <!-- Map HUD Stats Strip -->
+            <div class="threat-hud-strip">
+              <div class="threat-hud-item">
+                <span class="threat-hud-label">SIMULATED INTERCEPTS</span>
+                <span id="hud-intercepts-count" class="threat-hud-val">0</span>
+              </div>
+              <div class="threat-hud-divider"></div>
+              <div class="threat-hud-item">
+                <span class="threat-hud-label">ACTIVE ORIGINS</span>
+                <span id="hud-origins-count" class="threat-hud-val">0</span>
+              </div>
+              <div class="threat-hud-divider"></div>
+              <div class="threat-hud-item">
+                <span class="threat-hud-label">LAST INTERCEPT</span>
+                <span id="hud-last-origin" class="threat-hud-val" style="font-size: var(--text-xs); font-family: var(--font-mono);">--</span>
+              </div>
+              <div class="threat-hud-divider"></div>
+              <div class="threat-hud-item">
+                <span class="threat-hud-label">PRIMARY TARGET</span>
+                <span class="threat-hud-val" style="font-size: var(--text-xs); color: var(--color-accent);">US-East Auth Gateway</span>
+              </div>
+            </div>
+
+            <!-- Attack Map Canvas Container -->
+            <div id="attack-map-canvas" class="attack-map-wrapper" style="position: relative; overflow: hidden; background: #060a14; border-radius: var(--radius-md); border: 1px solid var(--color-border); aspect-ratio: 16 / 7; max-height: 480px;">
+              <img src="/assets/world_map.svg" alt="World Map Vector" class="world-map-svg" style="width: 100%; height: 100%; opacity: 0.38; filter: invert(1) hue-rotate(180deg) brightness(0.7); object-fit: cover; display: block;">
+              
+              <!-- SVG Layer for Trajectory Arcs and Target Gateway -->
+              <svg id="threat-map-svg-layer" class="threat-map-svg-layer" viewBox="0 0 1000 500" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2;">
+                <!-- Target Gateway Marker (US-East: 26.5% -> 265, 33.5% -> 167) -->
+                <g class="target-gateway-group">
+                  <circle cx="265" cy="167" r="14" fill="none" stroke="rgba(0, 210, 255, 0.3)" stroke-width="1.5">
+                    <animate attributeName="r" values="6;22" dur="2s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="1;0" dur="2s" repeatCount="indefinite"/>
+                  </circle>
+                  <circle cx="265" cy="167" r="5" fill="#00d2ff" stroke="#ffffff" stroke-width="1.5"/>
+                  <text x="278" y="172" fill="#00d2ff" font-size="11" font-family="monospace" font-weight="600">AUTH-GATEWAY-01</text>
+                </g>
+              </svg>
+
+              <!-- Dynamic Markers Container -->
+              <div id="threat-markers-container" style="position: absolute; inset: 0; pointer-events: none; z-index: 3;"></div>
+
               <div class="map-disclaimer-pill">Simulated Coordinate Projections • No External Geotracking</div>
             </div>
           </div>
+
+          <!-- Bottom Split: Live Intercept Stream Table & Top Origins Breakdown -->
+          <div class="grid-2-col" style="gap: var(--space-4);">
+            
+            <!-- Live Intercept Stream -->
+            <div class="card">
+              <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <h3 class="card-title">Live Telemetry Intercept Feed</h3>
+                  <span class="text-muted" style="font-size: var(--text-xs);">Real-time stream of synthetic adversary vectors</span>
+                </div>
+                <button id="threat-clear-feed-btn" type="button" class="btn btn-outline btn-xs" style="font-size: 11px; padding: 2px 8px;">Clear Feed</button>
+              </div>
+              <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+                <table class="data-table" style="font-size: var(--text-xs);">
+                  <thead>
+                    <tr>
+                      <th style="width: 80px;">Time</th>
+                      <th>Origin City</th>
+                      <th>Source IP</th>
+                      <th>Attack Scenario</th>
+                      <th>Target Identity</th>
+                      <th style="width: 80px; text-align: right;">Risk</th>
+                    </tr>
+                  </thead>
+                  <tbody id="threat-feed-tbody">
+                    <tr>
+                      <td colspan="6" class="text-center text-muted" style="padding: var(--space-4);">
+                        Waiting for simulated telemetry vectors...
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Geographic Threat Distribution -->
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3 class="card-title">Simulated Origin Distribution</h3>
+                  <span class="text-muted" style="font-size: var(--text-xs);">Frequency by synthetic adversary origin</span>
+                </div>
+                <span class="badge badge-outline">Top Hotspots</span>
+              </div>
+              <div id="threat-origins-distribution" style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px;">
+                <div class="text-muted text-xs text-center" style="padding: var(--space-4);">
+                  Origin distribution will populate as vectors strike the map.
+                </div>
+              </div>
+            </div>
+
+          </div>
+
         </section>
 
         <!-- ===================================================================
@@ -2348,6 +2484,7 @@
   <script src="js/detection.js"></script>
   <script src="js/ingestion.js"></script>
   <script src="js/reports.js"></script>
+  <script src="js/threat-map.js"></script>
 
   <script>
     // ── Single Page View Router ──────────────────────────────────────
@@ -2381,6 +2518,9 @@
       };
       if (titleEl) titleEl.textContent = titles[baseView] || 'SOC Workspace';
 
+      if (baseView === 'threat-map' && window.ThreatMap && typeof window.ThreatMap.activate === 'function') {
+        window.ThreatMap.activate();
+      }
       if (baseView === 'my-queue' && window.Investigation && window.Investigation.loadWorkQueue) {
         window.Investigation.loadWorkQueue();
       }
@@ -2431,6 +2571,7 @@
       window.Detection.init();
       if (window.Ingestion && window.Ingestion.init) window.Ingestion.init();
       if (window.Reports && window.Reports.init) window.Reports.init();
+      if (window.ThreatMap && window.ThreatMap.init) window.ThreatMap.init();
 
       const initialHash = window.location.hash.replace('#', '') || 'overview';
       switchView(initialHash);

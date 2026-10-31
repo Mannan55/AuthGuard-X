@@ -1460,3 +1460,137 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.025); }
   font-weight: var(--font-semibold);
 }
 
+/* ═══════════════════════════════════════════════════════
+   THREAT MAP LIVE SIMULATION STYLING
+═══════════════════════════════════════════════════════ */
+.threat-status-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+  animation: pulseDot 1.4s infinite;
+}
+
+.threat-status-paused .threat-status-pulse {
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b;
+  animation: none;
+}
+
+.threat-hud-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  background: rgba(6, 10, 20, 0.7);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  overflow-x: auto;
+}
+
+.threat-hud-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.threat-hud-label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.threat-hud-val {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+}
+
+.threat-hud-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--color-border);
+}
+
+.threat-arc-path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-dasharray: 8 4;
+  animation: arcTravel 1.6s ease-out forwards;
+}
+
+@keyframes arcTravel {
+  from {
+    stroke-dashoffset: 120;
+    opacity: 0.9;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 0.15;
+  }
+}
+
+.threat-origin-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.threat-origin-dot::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  animation: rippleOut 1.8s ease-out forwards;
+}
+
+@keyframes rippleOut {
+  0% { transform: scale(0.5); opacity: 1; }
+  100% { transform: scale(3.5); opacity: 0; }
+}
+
+.threat-origin-label {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 15, 29, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  pointer-events: none;
+  animation: labelFade 2.5s ease-out forwards;
+}
+
+@keyframes labelFade {
+  0% { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  75% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+}
+
+.threat-row-new {
+  animation: rowFlash 1.5s ease-out;
+}
+
+@keyframes rowFlash {
+  0% { background: rgba(0, 210, 255, 0.2); }
+  100% { background: transparent; }
+}
+
+

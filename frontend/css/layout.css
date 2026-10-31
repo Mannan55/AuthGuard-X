@@ -43,7 +43,7 @@ svg {
   max-width:      100%;
 }
 
-svg:not(.world-map-svg) {
+svg:not(.world-map-svg):not(.threat-map-svg-layer) {
   max-width:  48px;
   max-height: 48px;
 }

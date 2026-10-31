@@ -15,45 +15,36 @@ AuthGuard-X is a professional, local-first Security Operations Center (SOC) demo
 
 ## Visual Demonstration & SOC Workspaces
 
-| 1. Authentication Portal | 2. Operational SOC Overview |
+| Operational SOC Overview & Threat Telemetry | Incident Investigation & Lifecycle Workspace |
 |:---:|:---:|
-| ![Login View](docs/screenshots/01_login_view.png) | ![Dashboard Overview](docs/screenshots/02_dashboard_overview.png) |
-| *Session-based login with dev credential guidance* | *Live KPI cards, dynamic health score & threat timeline* |
+| ![Dashboard Overview](docs/screenshots/02_dashboard_overview.png) | ![Investigation Workspace](docs/screenshots/08_investigation_workspace.png) |
+| *Live KPI metrics, dynamic health posture, attack timeline & simulated vectors* | *4-stage investigation state machine (`New` → `Investigating` → `Contained` → `Resolved`)* |
 
-| 3. Advanced Incident Management Table | 4. Incident Detail Triage Modal |
+| Threat Detection & Correlated Alerts Feed | Evidence-Grounded Investigation Report Builder |
 |:---:|:---:|
-| ![Incidents Table](docs/screenshots/03_incidents_table.png) | ![Incident Detail](docs/screenshots/04_incident_detail_modal.png) |
-| *Search by ID/text, severity/status/source filters & pagination* | *Audit metadata, one-click remediation & investigation routing* |
+| ![Detection Alerts](docs/screenshots/11_detection_alerts_workspace.png) | ![Report Builder](docs/screenshots/26_report_builder_detail.png) |
+| *Sliding-window rule evaluations, MITRE ATT&CK techniques & 1-click case escalation* | *Data-grounded facts, structured analyst findings, QC checklist & printable exports* |
 
-| 5. Attack Simulation Lab | 6. Analyst Incident Work Queue |
-|:---:|:---:|
-| ![Simulations View](docs/screenshots/06_simulations_lab_view.png) | ![Case Queue View](docs/screenshots/07_case_queue_view.png) |
-| *Controlled synthetic vector injection with city/risk targeting* | *Queue isolation, active triage filters & real-time KPI metrics* |
+<details>
+<summary><b>View Additional Workspace Screenshots (Event Explorer, Audit Timeline, Simulations Lab, Print Export)</b></summary>
+<br>
 
-| 7. Investigation Workspace & Lifecycle Stepper | 8. Evidence Metadata & Audit Timeline |
-|:---:|:---:|
-| ![Investigation Workspace](docs/screenshots/08_investigation_workspace.png) | ![Timeline & Evidence](docs/screenshots/09_investigation_timeline_and_evidence.png) |
-| *State machine progression (`New` → `Investigating` → `Contained` → `Resolved`)* | *Sanitized notes, IOC/pcap evidence pointers & append-only activity audit trail* |
-
-| 9. Detection Alerts Feed & Threat Correlation | 10. Detection Rules Catalog & MITRE Mapping |
-|:---:|:---:|
-| ![Detection Alerts](docs/screenshots/11_detection_alerts_workspace.png) | ![Detection Rules](docs/screenshots/12_detection_rules_workspace.png) |
-| *High-fidelity correlated alerts, sliding-window grouping & 1-click case escalation* | *Enterprise rule catalog, MITRE ATT&CK techniques & safe condition builder* |
-
-| 11. Security Event Explorer | 12. Normalized Event Detail Modal |
+| Security Event Explorer & Normalization | Forensic Event Detail Modal |
 |:---:|:---:|
 | ![Event Explorer](docs/screenshots/18_event_explorer_workspace.png) | ![Event Detail Modal](docs/screenshots/19_event_detail_modal.png) |
 | *Searchable multi-format telemetry feed with batch provenance* | *Normalized forensic fields, UTC timestamps & SHA-256 byte hashes* |
 
-| 13. Case Reports Workspace | 14. Evidence-Grounded Report Builder |
+| Cyber Attack Simulation Lab | Incident Management Table |
 |:---:|:---:|
-| ![Reports Workspace](docs/screenshots/25_reports_workspace.png) | ![Report Builder](docs/screenshots/26_report_builder_detail.png) |
-| *Investigation reports with status filters & version snapshots* | *Auto-populated grounded facts, findings, and timeline* |
+| ![Simulations View](docs/screenshots/06_simulations_lab_view.png) | ![Incidents Table](docs/screenshots/03_incidents_table.png) |
+| *Controlled synthetic vector injection with city/risk targeting* | *Search by ID/text, severity/status/source filters & pagination* |
 
-| 15. Deterministic Quality Indicators (QC) | 16. Standalone Printable Report Export |
+| Investigation Timeline & Evidence Metadata | Standalone Printable HTML Report Export |
 |:---:|:---:|
-| ![Quality Checklist](docs/screenshots/27_report_quality_checklist.png) | ![Printable HTML Export](docs/screenshots/33_standalone_html_report_export.png) |
-| *6 automated indicators ensuring forensic completeness* | *Clean @media print layout with confidentiality disclaimers* |
+| ![Timeline & Evidence](docs/screenshots/09_investigation_timeline_and_evidence.png) | ![Printable HTML Export](docs/screenshots/33_standalone_html_report_export.png) |
+| *Sanitized notes, IOC/pcap evidence pointers & append-only activity audit trail* | *Clean @media print layout with deterministic quality checklist* |
+
+</details>
 
 ---
 
@@ -150,7 +141,7 @@ AuthGuard-X includes development demo accounts for local evaluation and testing:
 
 | Role | Username | Password | Permissions |
 | :--- | :--- | :--- | :--- |
-| **Administrator** | `admin` *(or `testadmin`)* | `admin123` *(or `AdminPassword2026!`)* | Full access across all cases, rules, ingestion batches, and reports. |
+| **Administrator** | `admin` *(or `testadmin`)* | `DemoAdminPassword2026!` *(or `admin123`)* | Full access across all cases, rules, ingestion batches, and reports. |
 | **SOC Analyst** | `analyst_john` | `AnalystPassword2026!` | Access to assigned cases, evidence linking, and personal reports. |
 | **SOC Analyst** | `analyst_jane` | `AnalystPassword2026!` | Isolated queue for multi-analyst access testing. |
 
@@ -180,7 +171,8 @@ All 34 browser assertions—including layout verification on 390px, 768px, 1440p
 - [Technical Architecture Specification (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md)
 - [5-Minute Analyst Demo Guide (`docs/DEMO_GUIDE.md`)](docs/DEMO_GUIDE.md)
 - [Presentation Outline (8–10 Slides) (`docs/PRESENTATION_OUTLINE.md`)](docs/PRESENTATION_OUTLINE.md)
-- [v1.0.0 Release Notes (`docs/RELEASE_NOTES_v1.0.md`)](docs/RELEASE_NOTES_v1.0.md)
+- [v3.0.0 Release Notes (`docs/RELEASE_NOTES_v3.0.md`)](docs/RELEASE_NOTES_v3.0.md)
+- [v1.0.0 Legacy Release Notes (`docs/RELEASE_NOTES_v1.0.md`)](docs/RELEASE_NOTES_v1.0.md)
 
 ---
 

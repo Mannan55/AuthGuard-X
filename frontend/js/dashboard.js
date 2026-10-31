@@ -184,6 +184,10 @@
 
   // ── Attack Map Simulation Dots ──────────────────────────────────────
   function addAttackMarker(xPercent, yPercent) {
+    if (window.ThreatMap && typeof window.ThreatMap.addMarker === 'function') {
+      window.ThreatMap.addMarker(xPercent, yPercent);
+      return;
+    }
     const map = document.getElementById('attack-map-canvas');
     if (!map) return;
 
