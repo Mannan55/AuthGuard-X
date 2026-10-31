@@ -3986,9 +3986,9 @@ def create_app(test_config=None) -> Flask:
         injected_ids = []
 
         if preset in ("credential_spray", "all"):
-            # 3 synthetic credential stuffing events for 'admin' (satisfies RULE-AUTH-001)
+            # 3 synthetic credential stuffing events for 'admin' (satisfies RULE-AUTH-001 within 60s window)
             for i in range(3):
-                t_str = (now - timedelta(seconds=20 * (3 - i))).strftime("%Y-%m-%d %H:%M:%S")
+                t_str = (now - timedelta(seconds=10 * (3 - i))).strftime("%Y-%m-%d %H:%M:%S")
                 c.execute("""
                     INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
                     VALUES ('admin', 'Credential Stuffing Attempt', 'brute_force_spray', 68, '198.51.100.88', 'Dallas, USA', ?, 0, 1)
