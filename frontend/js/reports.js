@@ -468,7 +468,7 @@
     if (!tbody) return;
 
     if (!versions.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Current draft working copy. No immutable snapshots finalized yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">Current draft working copy. No immutable snapshots finalized yet.</td></tr>';
       return;
     }
 
@@ -479,6 +479,12 @@
         <td><small>@${escapeHTML(v.finalized_by_username || v.author_username || '-')}</small></td>
         <td class="text-xs text-muted">${escapeHTML(v.finalized_at || v.created_at || '-')}</td>
         <td class="text-xs">${escapeHTML(v.change_summary || 'Preserved version snapshot.')}</td>
+        <td>
+          <div style="display: flex; gap: var(--space-1);">
+            <a href="${window.API.reports.getExportHtmlUrl(currentReportId, v.version)}" target="_blank" class="btn btn-secondary btn-xs" title="Export HTML for v${v.version}">HTML</a>
+            <a href="${window.API.reports.getExportJsonUrl(currentReportId, v.version)}" download class="btn btn-secondary btn-xs" title="Export JSON for v${v.version}">JSON</a>
+          </div>
+        </td>
       </tr>
     `).join('');
   }

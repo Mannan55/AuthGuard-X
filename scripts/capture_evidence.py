@@ -122,6 +122,10 @@ class CDPBrowser:
         })
         time.sleep(0.5)
 
+    def navigate(self, url):
+        self.send_cmd("Page.navigate", {"url": url})
+        time.sleep(1.8)
+
     def screenshot(self, filename):
         path = SCREENSHOTS_DIR / filename
         res = self.send_cmd("Page.captureScreenshot", {"format": "png"})
@@ -1442,7 +1446,8 @@ def run_full_verification():
         print(f"  -> Passed: Verified 6 deterministic quality checks and structured analyst findings.")
 
         # ── Assertion 33: Printable HTML Report Preview & JSON Export ───
-        print("\n[Assert 33] Verifying Printable HTML Report Export & JSON Export...")
+        print("\n[Assert 33] Verifying Printable HTML Report Export, Direct Navigation & JSON Export...")
+        active_report_id = browser.evaluate("document.getElementById('rep-detail-id').textContent.trim();")
         export_eval = browser.evaluate("""
             (async () => {
                 const activeId = document.getElementById('rep-detail-id').textContent.trim();
@@ -1458,7 +1463,7 @@ def run_full_verification():
                 return {
                     htmlOk: htmlFetch.ok,
                     hasPrintCss: htmlText.includes('@media print'),
-                    hasProvenanceNotice: htmlText.includes('PROVENANCE DISCLAIMER') || htmlText.includes('SOC Investigation Report'),
+                    hasProvenanceNotice: htmlText.includes('Forensic Evidence Grounding') || htmlText.includes('SOC Investigation Report'),
                     jsonOk: jsonFetch.ok,
                     jsonReportId: jsonVal.report ? jsonVal.report.report_id : null,
                     jsonNoTokens: !JSON.stringify(jsonVal).includes('password_hash')
@@ -1470,8 +1475,53 @@ def run_full_verification():
         assert export_eval["jsonOk"], "JSON export endpoint should succeed"
         assert export_eval["jsonNoTokens"], "JSON export must not leak sensitive authentication hashes or tokens"
         browser.screenshot("28_report_printable_export.png")
+
+        # Open standalone printable HTML export URL directly in Chromium
+        standalone_url = f"http://127.0.0.1:5000/api/reports/{active_report_id}/export/html"
+        browser.navigate(standalone_url)
+        standalone_eval = browser.evaluate("""
+            (() => {
+                const title = document.title;
+                const headerText = document.body ? document.body.innerText : '';
+                let printRuleFound = false;
+                for (let i = 0; i < document.styleSheets.length; i++) {
+                    try {
+                        const rules = document.styleSheets[i].cssRules;
+                        for (let j = 0; j < rules.length; j++) {
+                            if (rules[j].media && rules[j].media.mediaText.includes('print')) {
+                                printRuleFound = true;
+                                break;
+                            }
+                        }
+                    } catch(e) {}
+                }
+                const tables = document.querySelectorAll('table');
+                const hasScriptTag = !!document.querySelector('script:not([type="application/json"])');
+                return {
+                    title,
+                    hasHeader: headerText.includes('AuthGuard-X Investigation Report') || title.includes('SOC Investigation Report'),
+                    hasConfidential: headerText.includes('CONFIDENTIAL'),
+                    hasDisclaimer: headerText.includes('Forensic Evidence Grounding'),
+                    printRuleFound,
+                    tableCount: tables.length,
+                    hasScriptTag
+                };
+            })()
+        """)
+        assert standalone_eval["hasHeader"], "Standalone HTML export must render SOC Investigation Report header"
+        assert standalone_eval["hasConfidential"], "Standalone HTML export must include CONFIDENTIAL security marking"
+        assert standalone_eval["hasDisclaimer"], "Standalone HTML export must include evidence grounding disclaimer"
+        assert standalone_eval["printRuleFound"], "Standalone HTML export must load @media print styling rules"
+        assert standalone_eval["tableCount"] >= 3, "Standalone HTML export must render structured data tables"
+        assert not standalone_eval["hasScriptTag"], "Standalone HTML export must be strictly static with zero executable scripts"
+        browser.screenshot("33_standalone_html_report_export.png")
+
+        # Navigate back to main application
+        browser.navigate("http://127.0.0.1:5000/")
+        browser.evaluate("switchView('reports');")
+        time.sleep(1.0)
         passed_assertions += 1
-        print("  -> Passed: Self-contained printable HTML report and structured JSON export verified.")
+        print("  -> Passed: Self-contained printable HTML report, direct Chromium rendering, and structured JSON export verified.")
 
         # ── Assertion 34: Responsive Layouts across 390px, 768px, 1440px, 1920px ───
         print("\n[Assert 34] Verifying Responsive Breakpoints & Zero Horizontal Overflow for Case Reports...")

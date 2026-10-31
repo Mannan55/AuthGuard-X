@@ -478,11 +478,13 @@
         const qs = query.toString();
         return apiFetch(`/api/reports/${encodeURIComponent(reportId)}/timeline${qs ? `?${qs}` : ''}`);
       },
-      getExportHtmlUrl(reportId) {
-        return `/api/reports/${encodeURIComponent(reportId)}/export/html`;
+      getExportHtmlUrl(reportId, version = null) {
+        const vQuery = version ? `?version=${encodeURIComponent(version)}` : '';
+        return `/api/reports/${encodeURIComponent(reportId)}/export/html${vQuery}`;
       },
-      getExportJsonUrl(reportId) {
-        return `/api/reports/${encodeURIComponent(reportId)}/export/json`;
+      getExportJsonUrl(reportId, version = null) {
+        const vQuery = version ? `?version=${encodeURIComponent(version)}` : '';
+        return `/api/reports/${encodeURIComponent(reportId)}/export/json${vQuery}`;
       }
     }
   };

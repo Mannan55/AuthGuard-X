@@ -2151,6 +2151,7 @@ def render_printable_html_report(data: dict) -> str:
         <div class="report-header">
             <div>
                 <h1 class="brand-title">AuthGuard-X Investigation Report</h1>
+                <h2 style="font-size: 16px; margin: 4px 0 6px 0; color: #1e293b;">{esc(rep.get('title', 'SOC Investigation Report'))}</h2>
                 <p class="brand-sub">Digital Forensics &amp; SOC Case Documentation &bull; Version {esc(str(rep.get('version', 1)))}</p>
             </div>
             <div style="text-align: right;">
@@ -6090,8 +6091,19 @@ def create_app(test_config=None) -> Flask:
     # Sprint 5: Evidence-Grounded SOC Investigation Reports Endpoints
     # ---------------------------------------------------------
 
-    def _fetch_report_and_verify_access(report_id_str: str, conn=None):
-        """Helper to fetch a case report and verify user ownership/access permissions."""
+    def _fetch_report_and_verify_access(report_id_str: str, conn=None, required_permission: str = "read"):
+        """
+        Centralized server-enforced authorization gatekeeper for investigation case reports.
+        Enforces case ownership, author rights, reviewer access, and explicit administrative privileges.
+
+        Parameters:
+            report_id_str: Unique case report ID (e.g. REP-20261031-XXXXXX)
+            conn: Existing database connection or None
+            required_permission: "read" | "edit" | "transition" | "revise" | "evidence"
+
+        Returns:
+            (report_dict, error_response_tuple, connection)
+        """
         close_conn = False
         if conn is None:
             conn = get_db_connection(app.config["DATABASE_PATH"])
@@ -6115,13 +6127,117 @@ def create_app(test_config=None) -> Flask:
         report_dict = dict(row)
         caller_role = session.get("role", "analyst")
         caller_id = session.get("user_id")
+        caller_username = session.get("username", "analyst")
+
+        # Administrators have unrestricted administrative privileges across all report operations
+        if caller_role == "admin":
+            return report_dict, None, conn
+
+        assigned_to = report_dict.get("assigned_to")
+        author_id = report_dict.get("author_id")
+        reviewer_id = report_dict.get("reviewer_id")
+        reviewer_username = report_dict.get("reviewer_username")
+
+        is_owner = (assigned_to is not None and assigned_to == caller_id)
+        is_author = (author_id is not None and author_id == caller_id)
+        is_reviewer = ((reviewer_id is not None and reviewer_id == caller_id) or
+                       (reviewer_username is not None and reviewer_username == caller_username))
+        is_unassigned_case = (assigned_to is None)
+
+        # 1. READ PERMISSION: detail, timeline, exports
+        if required_permission == "read":
+            if not (is_owner or is_author or is_reviewer or is_unassigned_case):
+                if close_conn:
+                    conn.close()
+                assigned_name = report_dict.get("assigned_username") or "another analyst"
+                return None, (jsonify({
+                    "error": "Forbidden",
+                    "message": f"Access denied. Report '{report_id_str}' belongs to an investigation assigned to @{assigned_name}."
+                }), 403), conn
+            return report_dict, None, conn
+
+        # 2. EDIT PERMISSION: patch report content, findings, recommendations
+        if required_permission == "edit":
+            if report_dict.get("is_finalized"):
+                if close_conn:
+                    conn.close()
+                return None, (jsonify({
+                    "error": "Conflict",
+                    "message": f"Report '{report_id_str}' is finalized (v{report_dict['version']}) and immutable. Create a new revision via /revise to make modifications."
+                }), 409), conn
+            if not (is_owner or is_author):
+                if close_conn:
+                    conn.close()
+                assigned_name = report_dict.get("assigned_username") or report_dict.get("author_username") or "another analyst"
+                return None, (jsonify({
+                    "error": "Forbidden",
+                    "message": f"Access denied. Only the assigned analyst (@{assigned_name}) or an administrator can modify this report draft."
+                }), 403), conn
+            return report_dict, None, conn
+
+        # 3. EVIDENCE PERMISSION: link / unlink evidence references
+        if required_permission == "evidence":
+            if report_dict.get("is_finalized"):
+                if close_conn:
+                    conn.close()
+                return None, (jsonify({
+                    "error": "Conflict",
+                    "message": f"Report '{report_id_str}' is finalized (v{report_dict['version']}) and immutable. Evidence cannot be modified."
+                }), 409), conn
+            if not (is_owner or is_author):
+                if close_conn:
+                    conn.close()
+                assigned_name = report_dict.get("assigned_username") or report_dict.get("author_username") or "another analyst"
+                return None, (jsonify({
+                    "error": "Forbidden",
+                    "message": f"Access denied. Only the assigned analyst (@{assigned_name}) or an administrator can modify evidence links on this report."
+                }), 403), conn
+            return report_dict, None, conn
+
+        # 4. TRANSITION PERMISSION: draft -> in_review -> finalized
+        if required_permission == "transition":
+            if report_dict.get("is_finalized"):
+                if close_conn:
+                    conn.close()
+                return None, (jsonify({
+                    "error": "Conflict",
+                    "message": f"Report '{report_id_str}' is finalized (v{report_dict['version']}) and immutable. Call /revise to create a new revision."
+                }), 409), conn
+            if not (is_owner or is_author or is_reviewer):
+                if close_conn:
+                    conn.close()
+                assigned_name = report_dict.get("assigned_username") or report_dict.get("author_username") or "another analyst"
+                return None, (jsonify({
+                    "error": "Forbidden",
+                    "message": f"Access denied. Only the assigned analyst (@{assigned_name}), author, designated reviewer, or administrator can transition report lifecycle status."
+                }), 403), conn
+            return report_dict, None, conn
+
+        # 5. REVISE PERMISSION: initiating new revision from finalized report
+        if required_permission == "revise":
+            if not report_dict.get("is_finalized"):
+                if close_conn:
+                    conn.close()
+                return None, (jsonify({
+                    "error": "Bad Request",
+                    "message": f"Report '{report_id_str}' is currently in '{report_dict['status']}' state. Revisions can only be initiated from finalized reports."
+                }), 400), conn
+            if not (is_owner or is_author):
+                if close_conn:
+                    conn.close()
+                assigned_name = report_dict.get("assigned_username") or report_dict.get("author_username") or "another analyst"
+                return None, (jsonify({
+                    "error": "Forbidden",
+                    "message": f"Access denied. Only the assigned analyst (@{assigned_name}) or an administrator can revise this finalized report."
+                }), 403), conn
+            return report_dict, None, conn
 
         return report_dict, None, conn
 
     @app.route("/api/reports", methods=["GET"])
     @login_required
     def list_case_reports():
-        """Lists investigation case reports with filtering, pagination, and case linkage."""
+        """Lists investigation case reports with centralized authorization filtering, pagination, and case linkage."""
         case_id = request.args.get("case_id", type=int)
         status_filter = request.args.get("status", "").strip().lower()
         search_query = request.args.get("search", "").strip()
@@ -6129,11 +6245,19 @@ def create_app(test_config=None) -> Flask:
         per_page = min(100, max(1, request.args.get("per_page", 20, type=int)))
         offset = (page - 1) * per_page
 
+        caller_role = session.get("role", "analyst")
+        caller_id = session.get("user_id")
+
         conn = get_db_connection(app.config["DATABASE_PATH"])
         c = conn.cursor()
 
         conditions = ["1=1"]
         params = []
+
+        # Server-enforced authorization: non-administrators only see reports they own, authored, review, or unassigned cases
+        if caller_role != "admin":
+            conditions.append("(r.author_id = ? OR c.assigned_to = ? OR r.reviewer_id = ? OR c.assigned_to IS NULL)")
+            params.extend([caller_id, caller_id, caller_id])
 
         if case_id:
             conditions.append("r.case_id = ?")
@@ -6148,7 +6272,12 @@ def create_app(test_config=None) -> Flask:
 
         where_clause = " AND ".join(conditions)
 
-        c.execute(f"SELECT COUNT(*) AS total FROM case_reports r WHERE {where_clause}", params)
+        c.execute(f"""
+            SELECT COUNT(*) AS total
+            FROM case_reports r
+            JOIN cases c ON r.case_id = c.incident_id
+            WHERE {where_clause}
+        """, params)
         total_reports = c.fetchone()["total"]
 
         c.execute(f"""
@@ -6156,8 +6285,10 @@ def create_app(test_config=None) -> Flask:
                    r.author_id, r.author_username, r.reviewer_username,
                    r.incident_classification, r.severity, r.resolution_status,
                    r.is_finalized, r.created_at, r.updated_at, r.finalized_at,
+                   c.assigned_to, c.assigned_username,
                    (SELECT COUNT(*) FROM report_evidence_links el WHERE el.report_id = r.report_id) AS evidence_count
             FROM case_reports r
+            JOIN cases c ON r.case_id = c.incident_id
             WHERE {where_clause}
             ORDER BY r.updated_at DESC
             LIMIT ? OFFSET ?
@@ -6226,14 +6357,18 @@ def create_app(test_config=None) -> Flask:
                 WHERE incident_id = ?
             """, (caller_id, caller_username, now_str, case_id))
 
-        # Check for correlated detection alerts
+        # Check for correlated detection alerts with exact JSON array membership
         c.execute("""
             SELECT a.id, a.alert_id, a.rule_id, a.rule_name, a.severity, a.explanation,
                    r.mitre_technique_id, r.mitre_technique_name, r.mitre_url
             FROM detection_alerts a
             LEFT JOIN detection_rules r ON a.rule_id = r.id
-            WHERE a.linked_incident_id = ? OR a.matched_incident_ids_json LIKE ?
-        """, (case_id, f"%{case_id}%"))
+            WHERE a.linked_incident_id = ? OR (
+                json_valid(a.matched_incident_ids_json) AND EXISTS (
+                    SELECT 1 FROM json_each(a.matched_incident_ids_json) WHERE CAST(value AS INTEGER) = ?
+                )
+            )
+        """, (case_id, case_id))
         alerts = [dict(a) for a in c.fetchall()]
 
         # Check for linked security events
@@ -6508,33 +6643,15 @@ def create_app(test_config=None) -> Flask:
     @app.route("/api/reports/<report_id>", methods=["PATCH"])
     @login_required
     def update_case_report(report_id: str):
-        """Updates report draft with optimistic locking and case ownership verification."""
+        """Updates report draft with atomic conditional concurrency locking and centralized access authorization."""
         conn = get_db_connection(app.config["DATABASE_PATH"])
-        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn, required_permission="edit")
         if err:
             return err
 
-        if report_dict.get("is_finalized"):
-            conn.close()
-            return jsonify({
-                "error": "Conflict",
-                "message": f"Report '{report_id}' is finalized (v{report_dict['version']}) and immutable. Create a new revision via /revise to make modifications."
-            }), 409
-
-        caller_role = session.get("role", "analyst")
-        caller_id = session.get("user_id")
-        caller_username = session.get("username", "analyst")
-
-        if caller_role != "admin" and report_dict["author_id"] != caller_id and report_dict["assigned_to"] != caller_id:
-            conn.close()
-            return jsonify({
-                "error": "Forbidden",
-                "message": f"Cannot modify report authored by @{report_dict['author_username']}."
-            }), 403
-
         data = request.get_json(silent=True) or {}
 
-        # Validate expected version for optimistic concurrency
+        # Validate expected version for optimistic concurrency (reject missing, booleans, and malformed)
         expected_version = data.get("expected_version")
         if expected_version is None:
             conn.close()
@@ -6558,6 +6675,9 @@ def create_app(test_config=None) -> Flask:
                 "message": f"Stale update conflict: current report version is {report_dict['version']}, but expected {expected_version}."
             }), 409
 
+        caller_id = session.get("user_id")
+        caller_username = session.get("username", "analyst")
+
         # Extract editable fields with size boundaries
         title = data.get("title", report_dict["title"]).strip()[:200]
         exec_summary = data.get("executive_summary", report_dict["executive_summary"]).strip()[:10000]
@@ -6577,16 +6697,25 @@ def create_app(test_config=None) -> Flask:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         c = conn.cursor()
 
+        # Atomic conditional update enforcing report_id, exact version, and unfinalized status
         c.execute("""
             UPDATE case_reports
             SET title = ?, executive_summary = ?, analyst_findings_json = ?,
                 recommendations = ?, limitations_and_uncertainties = ?,
                 containment_remediation_history = ?, updated_at = ?
-            WHERE report_id = ?
+            WHERE report_id = ? AND version = ? AND is_finalized = 0
         """, (
             title, exec_summary, findings_json, recommendations, limitations,
-            rem_history, now_str, report_id
+            rem_history, now_str, report_id, expected_version
         ))
+
+        if c.rowcount == 0:
+            conn.rollback()
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Optimistic locking conflict: report '{report_id}' was concurrently modified, transitioned, or finalized."
+            }), 409
 
         # Record activity in incident audit log
         c.execute("""
@@ -6613,9 +6742,9 @@ def create_app(test_config=None) -> Flask:
     @app.route("/api/reports/<report_id>/status", methods=["POST"])
     @login_required
     def transition_report_status(report_id: str):
-        """Transitions report status (draft -> in_review -> finalized) with immutable snapshotting on finalization."""
+        """Transitions report status (draft -> in_review -> finalized) with atomic optimistic locking and immutable snapshotting."""
         conn = get_db_connection(app.config["DATABASE_PATH"])
-        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn, required_permission="transition")
         if err:
             return err
 
@@ -6651,14 +6780,6 @@ def create_app(test_config=None) -> Flask:
                 "message": f"Stale version conflict: report is at v{report_dict['version']}, expected v{expected_version}."
             }), 409
 
-        if report_dict.get("is_finalized"):
-            conn.close()
-            return jsonify({
-                "error": "Conflict",
-                "message": f"Report '{report_id}' is finalized (v{report_dict['version']}) and immutable. Call /revise to create a new revision."
-            }), 409
-
-        caller_role = session.get("role", "analyst")
         caller_id = session.get("user_id")
         caller_username = session.get("username", "analyst")
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -6691,6 +6812,9 @@ def create_app(test_config=None) -> Flask:
                 incident_row=case_data
             )
 
+            # Build full timeline at finalization time
+            timeline_items = _build_report_timeline(report_dict["case_id"], conn)
+
             disclaimer = (
                 "Finalization of this report represents internal review and evidence linkage within AuthGuard-X; "
                 "it does not constitute independent accredited forensic certification."
@@ -6714,10 +6838,18 @@ def create_app(test_config=None) -> Flask:
                 "recommendations": report_dict["recommendations"],
                 "limitations_and_uncertainties": report_dict["limitations_and_uncertainties"],
                 "evidence_links": evidence_links,
+                "timeline": timeline_items,
                 "quality_checks": qc,
+                "case_data": case_data,
+                "incident_data": case_data,
+                "author_id": report_dict.get("author_id"),
+                "author_username": report_dict.get("author_username"),
+                "reviewer_username": caller_username,
                 "finalized_by": caller_username,
                 "finalized_at": now_str,
-                "provenance_disclaimer": disclaimer
+                "created_at": report_dict.get("created_at"),
+                "provenance_disclaimer": disclaimer,
+                "is_historical_snapshot": True
             }
 
             change_summary = (data.get("change_summary") or f"Report v{report_dict['version']} finalized by @{caller_username}").strip()[:500]
@@ -6739,16 +6871,32 @@ def create_app(test_config=None) -> Flask:
                 UPDATE case_reports
                 SET status = 'finalized', is_finalized = 1, finalized_at = ?,
                     finalized_by_username = ?, reviewer_username = ?, updated_at = ?
-                WHERE report_id = ?
-            """, (now_str, caller_username, caller_username, now_str, report_id))
+                WHERE report_id = ? AND version = ? AND is_finalized = 0
+            """, (now_str, caller_username, caller_username, now_str, report_id, expected_version))
+
+            if c.rowcount == 0:
+                conn.rollback()
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": f"Optimistic locking conflict: report '{report_id}' was concurrently modified or already finalized."
+                }), 409
 
         else:
             reviewer = caller_username if new_status == "in_review" else report_dict.get("reviewer_username")
             c.execute("""
                 UPDATE case_reports
                 SET status = ?, reviewer_username = ?, updated_at = ?
-                WHERE report_id = ?
-            """, (new_status, reviewer, now_str, report_id))
+                WHERE report_id = ? AND version = ? AND is_finalized = 0
+            """, (new_status, reviewer, now_str, report_id, expected_version))
+
+            if c.rowcount == 0:
+                conn.rollback()
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": f"Optimistic locking conflict: report '{report_id}' was concurrently modified or finalized."
+                }), 409
 
         # Record activity in incident audit log
         c.execute("""
@@ -6777,20 +6925,31 @@ def create_app(test_config=None) -> Flask:
     @app.route("/api/reports/<report_id>/revise", methods=["POST"])
     @login_required
     def revise_finalized_report(report_id: str):
-        """Creates a new version draft from a finalized report, incrementing the version and preserving the historical snapshot."""
+        """Creates a new version draft from a finalized report with atomic versioning."""
         conn = get_db_connection(app.config["DATABASE_PATH"])
-        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn, required_permission="revise")
         if err:
             return err
 
-        if not report_dict.get("is_finalized"):
-            conn.close()
-            return jsonify({
-                "error": "Bad Request",
-                "message": f"Report '{report_id}' is currently in '{report_dict['status']}' state. Revisions can only be initiated from finalized reports."
-            }), 400
-
         data = request.get_json(silent=True) or {}
+        expected_version = data.get("expected_version")
+        if expected_version is not None:
+            try:
+                if isinstance(expected_version, bool):
+                    raise ValueError("Booleans are invalid versions")
+                expected_version = int(expected_version)
+            except (ValueError, TypeError):
+                conn.close()
+                return jsonify({"error": "Bad Request", "message": "Field 'expected_version' must be an integer."}), 400
+            if expected_version != report_dict["version"]:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": f"Stale version conflict: report is at v{report_dict['version']}, expected v{expected_version}."
+                }), 409
+        else:
+            expected_version = report_dict["version"]
+
         change_summary = (data.get("change_summary") or "New revision initiated for additional findings and evidence analysis.").strip()[:500]
 
         caller_id = session.get("user_id")
@@ -6803,8 +6962,16 @@ def create_app(test_config=None) -> Flask:
             UPDATE case_reports
             SET version = ?, status = 'draft', is_finalized = 0,
                 updated_at = ?, finalized_at = NULL, finalized_by_username = NULL
-            WHERE report_id = ?
-        """, (new_version, now_str, report_id))
+            WHERE report_id = ? AND version = ? AND is_finalized = 1
+        """, (new_version, now_str, report_id, expected_version))
+
+        if c.rowcount == 0:
+            conn.rollback()
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Optimistic locking conflict: report '{report_id}' was concurrently revised or is no longer in finalized state."
+            }), 409
 
         c.execute("""
             INSERT INTO incident_audit_log (
@@ -6832,20 +6999,33 @@ def create_app(test_config=None) -> Flask:
     @app.route("/api/reports/<report_id>/evidence", methods=["POST"])
     @login_required
     def link_report_evidence(report_id: str):
-        """Links a verified evidence item to the report while enforcing strict case isolation."""
+        """Links a verified evidence item to the report with case isolation and atomic concurrency protection."""
         conn = get_db_connection(app.config["DATABASE_PATH"])
-        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn, required_permission="evidence")
         if err:
             return err
 
-        if report_dict.get("is_finalized"):
-            conn.close()
-            return jsonify({
-                "error": "Conflict",
-                "message": f"Report '{report_id}' is finalized and immutable. Create a new revision to add evidence links."
-            }), 409
-
         data = request.get_json(silent=True) or {}
+
+        # Validate expected version if provided
+        expected_version = data.get("expected_version")
+        if expected_version is not None:
+            try:
+                if isinstance(expected_version, bool):
+                    raise ValueError("Booleans are invalid versions")
+                expected_version = int(expected_version)
+            except (ValueError, TypeError):
+                conn.close()
+                return jsonify({"error": "Bad Request", "message": "Field 'expected_version' must be an integer."}), 400
+            if expected_version != report_dict["version"]:
+                conn.close()
+                return jsonify({
+                    "error": "Conflict",
+                    "message": f"Stale version conflict: report is at v{report_dict['version']}, expected v{expected_version}."
+                }), 409
+        else:
+            expected_version = report_dict["version"]
+
         ref_type = (data.get("reference_type") or "").strip().lower()
         ref_id = str(data.get("reference_id") or "").strip()
         label = (data.get("label") or f"Evidence {ref_type}:{ref_id}").strip()[:200]
@@ -6866,7 +7046,7 @@ def create_app(test_config=None) -> Flask:
         case_id = report_dict["case_id"]
         c = conn.cursor()
 
-        # Enforce Case Isolation: verify that the evidence reference belongs to this case!
+        # Enforce Case Isolation: verify that the evidence reference belongs strictly to this case!
         is_valid = False
         prov_status = "observed"
         snapshot_summary = ""
@@ -6888,7 +7068,16 @@ def create_app(test_config=None) -> Flask:
                 prov_status = "observed" if row["provenance"] in ("observed", "system", "synthetic") else "unverified_import"
                 snapshot_summary = f"Event {row['event_id']}: {row['attack_type']} ({row['outcome']}) from {row['source_ip']} at {row['event_time']}"
         elif ref_type == "alert":
-            c.execute("SELECT alert_id, rule_name, severity, explanation FROM detection_alerts WHERE (alert_id = ? OR id = ?) AND (linked_incident_id = ? OR matched_incident_ids_json LIKE ?)", (ref_id, ref_id, case_id, f"%{case_id}%"))
+            c.execute("""
+                SELECT alert_id, rule_name, severity, explanation
+                FROM detection_alerts
+                WHERE (alert_id = ? OR id = ?)
+                  AND (linked_incident_id = ? OR (
+                      json_valid(matched_incident_ids_json) AND EXISTS (
+                          SELECT 1 FROM json_each(matched_incident_ids_json) WHERE CAST(value AS INTEGER) = ?
+                      )
+                  ))
+            """, (ref_id, ref_id, case_id, case_id))
             row = c.fetchone()
             if row:
                 is_valid = True
@@ -6941,6 +7130,20 @@ def create_app(test_config=None) -> Flask:
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Atomic check: ensure report is at expected version and not finalized
+        c.execute("""
+            UPDATE case_reports
+            SET updated_at = ?
+            WHERE report_id = ? AND version = ? AND is_finalized = 0
+        """, (now_str, report_id, expected_version))
+        if c.rowcount == 0:
+            conn.rollback()
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Optimistic locking conflict: report '{report_id}' was concurrently modified or finalized."
+            }), 409
+
         c.execute("""
             INSERT INTO report_evidence_links (
                 report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
@@ -6949,10 +7152,6 @@ def create_app(test_config=None) -> Flask:
             report_id, case_id, ref_type, str(ref_id), label, prov_status, snapshot_summary, limitations_note, now_str
         ))
         link_id = c.lastrowid
-
-        c.execute("""
-            UPDATE case_reports SET updated_at = ? WHERE report_id = ?
-        """, (now_str, report_id))
 
         conn.commit()
         conn.close()
@@ -6969,18 +7168,11 @@ def create_app(test_config=None) -> Flask:
     @app.route("/api/reports/<report_id>/evidence/<int:link_id>", methods=["DELETE"])
     @login_required
     def unlink_report_evidence(report_id: str, link_id: int):
-        """Unlinks an evidence reference from a draft/in_review report."""
+        """Unlinks an evidence reference with atomic concurrency locking."""
         conn = get_db_connection(app.config["DATABASE_PATH"])
-        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn, required_permission="evidence")
         if err:
             return err
-
-        if report_dict.get("is_finalized"):
-            conn.close()
-            return jsonify({
-                "error": "Conflict",
-                "message": f"Report '{report_id}' is finalized and immutable. Cannot remove evidence links."
-            }), 409
 
         c = conn.cursor()
         c.execute("DELETE FROM report_evidence_links WHERE id = ? AND report_id = ?", (link_id, report_id))
@@ -6989,7 +7181,21 @@ def create_app(test_config=None) -> Flask:
             return jsonify({"error": "Not Found", "message": f"Evidence link #{link_id} not found on report '{report_id}'."}), 404
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("UPDATE case_reports SET updated_at = ? WHERE report_id = ?", (now_str, report_id))
+
+        # Atomic check: ensure report was not finalized concurrently
+        c.execute("""
+            UPDATE case_reports
+            SET updated_at = ?
+            WHERE report_id = ? AND version = ? AND is_finalized = 0
+        """, (now_str, report_id, report_dict["version"]))
+        if c.rowcount == 0:
+            conn.rollback()
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Optimistic locking conflict: report '{report_id}' was concurrently modified or finalized."
+            }), 409
+
         conn.commit()
         conn.close()
 
@@ -7045,8 +7251,15 @@ def create_app(test_config=None) -> Flask:
         c.execute("""
             SELECT alert_id, rule_name, severity, first_event_time, last_event_time, created_at, explanation
             FROM detection_alerts
-            WHERE linked_incident_id = ? OR matched_incident_ids_json LIKE ?
-        """, (case_id, f"%{case_id}%"))
+            WHERE linked_incident_id = ?
+               OR (
+                   json_valid(matched_incident_ids_json)
+                   AND EXISTS (
+                       SELECT 1 FROM json_each(matched_incident_ids_json)
+                       WHERE CAST(value AS INTEGER) = ?
+                   )
+               )
+        """, (case_id, case_id))
         for row in c.fetchall():
             a = dict(row)
             timeline_items.append({
@@ -7091,6 +7304,157 @@ def create_app(test_config=None) -> Flask:
         timeline_items.sort(key=lambda x: x["occurrence_time"] or "", reverse=reverse_sort)
         return timeline_items
 
+    def _build_full_report_data_from_snapshot(snapshot: dict, report_dict: dict, conn):
+        """Constructs complete report data structure directly from immutable version snapshot."""
+        case_data = snapshot.get("case_data")
+        if not case_data:
+            c = conn.cursor()
+            c.execute("""
+                SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time
+                FROM cases c
+                JOIN logs l ON c.incident_id = l.id
+                WHERE c.incident_id = ?
+            """, (report_dict["case_id"],))
+            row = c.fetchone()
+            case_data = dict(row) if row else {}
+
+        report_obj = {
+            "report_id": snapshot.get("report_id", report_dict["report_id"]),
+            "case_id": case_data.get("incident_id") or report_dict["case_id"],
+            "version": snapshot.get("version", report_dict["version"]),
+            "status": snapshot.get("status", "finalized"),
+            "title": snapshot.get("title", report_dict["title"]),
+            "executive_summary": snapshot.get("executive_summary", ""),
+            "incident_classification": snapshot.get("incident_classification", "Unclassified"),
+            "severity": snapshot.get("severity", "medium"),
+            "detection_context": snapshot.get("detection_context", ""),
+            "affected_accounts_json": snapshot.get("affected_accounts_json", "[]"),
+            "affected_assets_json": snapshot.get("affected_assets_json", "[]"),
+            "mitre_attack_json": snapshot.get("mitre_attack_json", "[]"),
+            "analyst_findings_json": snapshot.get("analyst_findings_json", "[]"),
+            "containment_remediation_history": snapshot.get("containment_remediation_history", ""),
+            "resolution_status": snapshot.get("resolution_status", "in_progress"),
+            "recommendations": snapshot.get("recommendations", ""),
+            "limitations_and_uncertainties": snapshot.get("limitations_and_uncertainties", ""),
+            "author_id": snapshot.get("author_id", report_dict.get("author_id")),
+            "author_username": snapshot.get("author_username", report_dict.get("author_username")),
+            "reviewer_username": snapshot.get("reviewer_username", report_dict.get("reviewer_username")),
+            "finalized_by_username": snapshot.get("finalized_by", report_dict.get("finalized_by_username")),
+            "finalized_at": snapshot.get("finalized_at", report_dict.get("finalized_at")),
+            "created_at": snapshot.get("created_at", report_dict.get("created_at")),
+            "is_finalized": 1
+        }
+
+        evidence_links = snapshot.get("evidence_links")
+        if evidence_links is None:
+            c = conn.cursor()
+            c.execute("""
+                SELECT id, report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+                FROM report_evidence_links
+                WHERE report_id = ?
+                ORDER BY id ASC
+            """, (report_dict["report_id"],))
+            evidence_links = [dict(r) for r in c.fetchall()]
+
+        timeline_items = snapshot.get("timeline")
+        if timeline_items is None:
+            timeline_items = _build_report_timeline(report_dict["case_id"], conn)
+
+        qc = snapshot.get("quality_checks")
+        if qc is None:
+            qc = evaluate_report_quality_checks(report_obj, case_data, evidence_links, case_data, [])
+
+        target_v = snapshot.get("version", report_dict["version"])
+        c = conn.cursor()
+        c.execute("""
+            SELECT version, title, status, author_username, reviewer_username, finalized_by_username, finalized_at, change_summary, created_at
+            FROM report_versions
+            WHERE report_id = ? AND version <= ?
+            ORDER BY version DESC
+        """, (report_dict["report_id"], target_v))
+        versions = [dict(v) for v in c.fetchall()]
+
+        return {
+            "report": report_obj,
+            "case": case_data,
+            "incident": case_data,
+            "evidence_links": evidence_links,
+            "timeline": timeline_items,
+            "quality_checks": qc,
+            "version_history": versions
+        }
+
+    def _load_report_full_data_for_export(report_id: str, report_dict: dict, conn, target_version: int = None):
+        """
+        Loads full report data either from immutable historical snapshot in report_versions
+        or from live database if the version is unfinalized (draft/in_review).
+        Returns (full_data_dict, filename_prefix, error_response).
+        """
+        c = conn.cursor()
+        if target_version is not None:
+            c.execute("SELECT snapshot_json FROM report_versions WHERE report_id = ? AND version = ?", (report_id, target_version))
+            v_row = c.fetchone()
+            if not v_row:
+                return None, None, (jsonify({
+                    "error": "Not Found",
+                    "message": f"Version {target_version} of report '{report_id}' not found in version history."
+                }), 404)
+            snapshot = json.loads(v_row["snapshot_json"])
+            full_data = _build_full_report_data_from_snapshot(snapshot, report_dict, conn)
+            return full_data, f"{report_id}_v{target_version}", None
+
+        if report_dict.get("is_finalized"):
+            c.execute("SELECT snapshot_json FROM report_versions WHERE report_id = ? AND version = ?", (report_id, report_dict["version"]))
+            v_row = c.fetchone()
+            if v_row:
+                snapshot = json.loads(v_row["snapshot_json"])
+                full_data = _build_full_report_data_from_snapshot(snapshot, report_dict, conn)
+                return full_data, report_id, None
+
+        # Live export for draft / in_review
+        case_id = report_dict["case_id"]
+        c.execute("""
+            SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time
+            FROM cases c
+            JOIN logs l ON c.incident_id = l.id
+            WHERE c.incident_id = ?
+        """, (case_id,))
+        case_row = c.fetchone()
+        case_data = dict(case_row) if case_row else {}
+
+        c.execute("""
+            SELECT id, report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+            FROM report_evidence_links
+            WHERE report_id = ?
+            ORDER BY id ASC
+        """, (report_id,))
+        evidence_links = [dict(r) for r in c.fetchall()]
+
+        timeline_items = _build_report_timeline(case_id, conn)
+
+        c.execute("SELECT * FROM security_events WHERE incident_id = ?", (case_id,))
+        sec_events = [dict(s) for s in c.fetchall()]
+        qc = evaluate_report_quality_checks(report_dict, case_data, evidence_links, case_data, sec_events)
+
+        c.execute("""
+            SELECT version, title, status, author_username, reviewer_username, finalized_by_username, finalized_at, change_summary, created_at
+            FROM report_versions
+            WHERE report_id = ?
+            ORDER BY version DESC
+        """, (report_id,))
+        versions = [dict(v) for v in c.fetchall()]
+
+        full_data = {
+            "report": report_dict,
+            "case": case_data,
+            "incident": case_data,
+            "evidence_links": evidence_links,
+            "timeline": timeline_items,
+            "quality_checks": qc,
+            "version_history": versions
+        }
+        return full_data, report_id, None
+
     @app.route("/api/reports/<report_id>/timeline", methods=["GET"])
     @login_required
     def get_report_timeline(report_id: str):
@@ -7100,16 +7464,46 @@ def create_app(test_config=None) -> Flask:
         if err:
             return err
 
+        version_param = request.args.get("version", type=int)
         category_filter = request.args.get("category", "all").strip().lower()
         sort_dir = request.args.get("sort_dir", "asc").strip().lower()
         case_id = report_dict["case_id"]
 
-        timeline_items = _build_report_timeline(case_id, conn, category_filter, sort_dir)
+        if version_param is not None:
+            c = conn.cursor()
+            c.execute("SELECT snapshot_json FROM report_versions WHERE report_id = ? AND version = ?", (report_id, version_param))
+            v_row = c.fetchone()
+            if not v_row:
+                conn.close()
+                return jsonify({"error": "Not Found", "message": f"Version {version_param} of report '{report_id}' not found in version history."}), 404
+            snapshot = json.loads(v_row["snapshot_json"])
+            timeline_items = snapshot.get("timeline") or []
+            active_version = version_param
+        elif report_dict.get("is_finalized"):
+            c = conn.cursor()
+            c.execute("SELECT snapshot_json FROM report_versions WHERE report_id = ? AND version = ?", (report_id, report_dict["version"]))
+            v_row = c.fetchone()
+            if v_row:
+                snapshot = json.loads(v_row["snapshot_json"])
+                timeline_items = snapshot.get("timeline") or []
+            else:
+                timeline_items = _build_report_timeline(case_id, conn)
+            active_version = report_dict["version"]
+        else:
+            timeline_items = _build_report_timeline(case_id, conn)
+            active_version = report_dict["version"]
+
+        if category_filter != "all":
+            timeline_items = [item for item in timeline_items if item.get("category") == category_filter]
+
+        reverse_sort = (sort_dir == "desc")
+        timeline_items.sort(key=lambda x: x.get("occurrence_time") or "", reverse=reverse_sort)
         conn.close()
 
         return jsonify({
             "report_id": report_id,
             "case_id": case_id,
+            "version": active_version,
             "total_events": len(timeline_items),
             "timeline": timeline_items
         }), 200
@@ -7123,51 +7517,11 @@ def create_app(test_config=None) -> Flask:
         if err:
             return err
 
-        c = conn.cursor()
-        case_id = report_dict["case_id"]
-
-        c.execute("""
-            SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time
-            FROM cases c
-            JOIN logs l ON c.incident_id = l.id
-            WHERE c.incident_id = ?
-        """, (case_id,))
-        case_data = dict(c.fetchone())
-
-        c.execute("""
-            SELECT id, report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
-            FROM report_evidence_links
-            WHERE report_id = ?
-            ORDER BY id ASC
-        """, (report_id,))
-        evidence_links = [dict(r) for r in c.fetchall()]
-
-        # Generate timeline
-        timeline_items = _build_report_timeline(case_id, conn)
-
-        # Quality checks
-        c.execute("SELECT * FROM security_events WHERE incident_id = ?", (case_id,))
-        sec_events = [dict(s) for s in c.fetchall()]
-        qc = evaluate_report_quality_checks(report_dict, case_data, evidence_links, case_data, sec_events)
-
-        c.execute("""
-            SELECT version, title, status, author_username, reviewer_username, finalized_by_username, finalized_at, change_summary, created_at
-            FROM report_versions
-            WHERE report_id = ?
-            ORDER BY version DESC
-        """, (report_id,))
-        versions = [dict(v) for v in c.fetchall()]
+        target_version = request.args.get("version", type=int)
+        full_data, filename_prefix, load_err = _load_report_full_data_for_export(report_id, report_dict, conn, target_version)
         conn.close()
-
-        full_data = {
-            "report": report_dict,
-            "case": case_data,
-            "incident": case_data,
-            "evidence_links": evidence_links,
-            "timeline": timeline_items,
-            "quality_checks": qc,
-            "version_history": versions
-        }
+        if load_err:
+            return load_err
 
         html_content = render_printable_html_report(full_data)
 
@@ -7175,7 +7529,7 @@ def create_app(test_config=None) -> Flask:
         return Response(
             html_content,
             mimetype="text/html",
-            headers={"Content-Disposition": f"inline; filename={report_id}.html"}
+            headers={"Content-Disposition": f"inline; filename={filename_prefix}.html"}
         )
 
     @app.route("/api/reports/<report_id>/export/json", methods=["GET"])
@@ -7187,49 +7541,11 @@ def create_app(test_config=None) -> Flask:
         if err:
             return err
 
-        c = conn.cursor()
-        case_id = report_dict["case_id"]
-
-        c.execute("""
-            SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time
-            FROM cases c
-            JOIN logs l ON c.incident_id = l.id
-            WHERE c.incident_id = ?
-        """, (case_id,))
-        case_data = dict(c.fetchone())
-
-        c.execute("""
-            SELECT id, report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
-            FROM report_evidence_links
-            WHERE report_id = ?
-            ORDER BY id ASC
-        """, (report_id,))
-        evidence_links = [dict(r) for r in c.fetchall()]
-
-        timeline_items = _build_report_timeline(case_id, conn)
-
-        c.execute("SELECT * FROM security_events WHERE incident_id = ?", (case_id,))
-        sec_events = [dict(s) for s in c.fetchall()]
-        qc = evaluate_report_quality_checks(report_dict, case_data, evidence_links, case_data, sec_events)
-
-        c.execute("""
-            SELECT version, title, status, author_username, reviewer_username, finalized_by_username, finalized_at, change_summary, created_at
-            FROM report_versions
-            WHERE report_id = ?
-            ORDER BY version DESC
-        """, (report_id,))
-        versions = [dict(v) for v in c.fetchall()]
+        target_version = request.args.get("version", type=int)
+        full_data, filename_prefix, load_err = _load_report_full_data_for_export(report_id, report_dict, conn, target_version)
         conn.close()
-
-        full_data = {
-            "report": report_dict,
-            "case": case_data,
-            "incident": case_data,
-            "evidence_links": evidence_links,
-            "timeline": timeline_items,
-            "quality_checks": qc,
-            "version_history": versions
-        }
+        if load_err:
+            return load_err
 
         json_data = render_structured_json_report(full_data)
 
@@ -7237,7 +7553,7 @@ def create_app(test_config=None) -> Flask:
         return Response(
             json.dumps(json_data, indent=2),
             mimetype="application/json",
-            headers={"Content-Disposition": f"attachment; filename={report_id}.json"}
+            headers={"Content-Disposition": f"attachment; filename={filename_prefix}.json"}
         )
 
     # ---------------------------------------------------------
