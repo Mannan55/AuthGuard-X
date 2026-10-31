@@ -540,6 +540,34 @@ def run_full_verification():
         # Capture Mobile Layout (390x844)
         browser.resize(390, 844)
         time.sleep(1)
+
+        # Mobile Toast Positioning Check: ensure notifications do not obscure topbar controls
+        mobile_toast_check = browser.evaluate("""
+            (() => {
+                window.UI.showToast('AuthGuard-X mobile toast notification', 'info');
+                const container = document.getElementById('toast-container');
+                const toast = container.querySelector('.toast');
+                if (!toast) return { found: false };
+                const cRect = container.getBoundingClientRect();
+                const tRect = toast.getBoundingClientRect();
+                const topbar = document.getElementById('topbar');
+                const topbarRect = topbar ? topbar.getBoundingClientRect() : { bottom: 56 };
+                return {
+                    found: true,
+                    topbarBottom: topbarRect.bottom,
+                    toastTop: tRect.top,
+                    toastBottom: tRect.bottom,
+                    containerBottom: cRect.bottom,
+                    isBottomAnchored: tRect.top > topbarRect.bottom,
+                    viewportHeight: window.innerHeight
+                };
+            })()
+        """)
+        print(f"  Mobile 390px Toast Position Check: {mobile_toast_check}")
+        assert mobile_toast_check["found"], "Toast notification must render in DOM"
+        assert mobile_toast_check["isBottomAnchored"], "Toast notification must not obscure topbar controls on 390px mobile viewport"
+        assert mobile_toast_check["toastBottom"] <= mobile_toast_check["viewportHeight"] + 20, "Toast must be within visible viewport"
+
         browser.screenshot("05_mobile_layout.png")
 
         # Restore Desktop 1440x900 for Sprint 2 journeys

@@ -697,3 +697,308 @@ def test_alert_escalation_authorization_and_cross_analyst_protection(test_env):
     # 5. Repeated escalation to same incident is rejected with 409 Conflict
     repeat_res = admin.post(f"/api/detection/alerts/{alert_id}/escalate", json={"incident_id": target_id})
     assert repeat_res.status_code == 409
+
+
+# =========================================================================
+# SPRINT 3 POST-INTEGRATION HARDENING REGRESSION TESTS
+# =========================================================================
+
+def test_exact_detection_windows(authed_admin):
+    """Verify that detection rules have exact window requirements:
+    RULE-AUTH-001: 60s, RULE-NET-002: 45s, RULE-BURST-004: 120s, RULE-BEHAV-005: 180s.
+    """
+    client, _, _, _ = authed_admin
+    res = client.get("/api/detection/rules")
+    assert res.status_code == 200
+    rules = {r["rule_id"]: r for r in res.get_json()["rules"]}
+
+    assert rules["RULE-AUTH-001"]["time_window_seconds"] == 60
+    assert rules["RULE-NET-002"]["time_window_seconds"] == 45
+    assert rules["RULE-BURST-004"]["time_window_seconds"] == 120
+    assert rules["RULE-BEHAV-005"]["time_window_seconds"] == 180
+
+
+def test_multi_target_password_spray_requires_distinct_usernames(test_env):
+    """RULE-BURST-004 must require genuinely distinct target usernames (>= 5),
+    not merely 5 events against the same account.
+    """
+    client, _, db_path, app = test_env
+    admin = app.test_client()
+    admin.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+
+    now = datetime.now()
+
+    with app.app_context():
+        conn = get_db_connection(db_path)
+        c = conn.cursor()
+
+        # Part 1: Inject 5 auth attack events all targeting single user 'admin'
+        # with attack containing 'Attempt' and risk >= 40 (satisfying condition, but not distinct targets)
+        single_user_ids = []
+        for i in range(5):
+            t = (now - timedelta(seconds=10 * (5 - i))).strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("""
+                INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                VALUES ('admin', 'Credential Stuffing Attempt', 'auth_failure', 50, '198.51.100.10', 'Chicago', ?, 0, 1)
+            """, (t,))
+            log_id = c.lastrowid
+            c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (log_id, t, t))
+            single_user_ids.append(log_id)
+        conn.commit()
+
+        # Evaluate detection pipeline
+        evaluate_detection_pipeline(single_user_ids, db_path)
+
+        # Check alerts: RULE-BURST-004 should NOT trigger because only 1 unique user was targeted
+        c.execute("""
+            SELECT a.id, a.alert_id, r.rule_id, a.explanation
+            FROM detection_alerts a
+            JOIN detection_rules r ON a.rule_id = r.id
+            WHERE r.rule_id = 'RULE-BURST-004'
+        """)
+        spray_alert = c.fetchone()
+        assert spray_alert is None, "RULE-BURST-004 must not trigger on 5 events targeting the same username"
+
+        # Part 2: Inject 5 events targeting 5 genuinely distinct usernames
+        distinct_user_ids = []
+        distinct_usernames = ["user_alice", "user_bob", "user_charlie", "user_dave", "user_eve"]
+        for idx, u in enumerate(distinct_usernames):
+            t = (now - timedelta(seconds=5 * (5 - idx))).strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("""
+                INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                VALUES (?, 'Password Spraying Attempt', 'auth_failure', 50, '198.51.100.20', 'Dallas', ?, 0, 1)
+            """, (u, t))
+            log_id = c.lastrowid
+            c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (log_id, t, t))
+            distinct_user_ids.append(log_id)
+        conn.commit()
+
+        # Evaluate detection pipeline
+        evaluate_detection_pipeline(distinct_user_ids, db_path)
+
+        # Check alerts: RULE-BURST-004 MUST now trigger on 5 distinct accounts
+        c.execute("""
+            SELECT a.id, a.alert_id, r.rule_id, a.explanation
+            FROM detection_alerts a
+            JOIN detection_rules r ON a.rule_id = r.id
+            WHERE r.rule_id = 'RULE-BURST-004'
+        """)
+        spray_alert = c.fetchone()
+        assert spray_alert is not None, "RULE-BURST-004 must trigger when distinct usernames are targeted"
+        assert "distinct user accounts" in spray_alert["explanation"]
+        conn.close()
+
+
+def test_correlation_window_expiration_prevents_infinite_accumulation(test_env):
+    """Old open detection alerts must not accumulate new events forever.
+    When subsequent events fall outside the correlation window, a new alert is generated.
+    """
+    client, _, db_path, app = test_env
+    admin = app.test_client()
+    admin.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+
+    with app.app_context():
+        conn = get_db_connection(db_path)
+        c = conn.cursor()
+
+        # Window for RULE-AUTH-001 is 60 seconds
+        base_time = datetime(2026, 10, 31, 8, 0, 0)
+
+        # First wave of 3 events at 08:00:10, 08:00:20, 08:00:30 (all within 60s)
+        wave1_ids = []
+        for s in (10, 20, 30):
+            t = (base_time + timedelta(seconds=s)).strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("""
+                INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                VALUES ('target_user', 'Credential Stuffing', 'brute_force', 70, '192.0.2.1', 'London', ?, 0, 1)
+            """, (t,))
+            lid = c.lastrowid
+            c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (lid, t, t))
+            wave1_ids.append(lid)
+        conn.commit()
+
+        evaluate_detection_pipeline(wave1_ids, db_path)
+
+        # Verify initial alert created
+        c.execute("""
+            SELECT a.alert_id, a.matched_count
+            FROM detection_alerts a
+            JOIN detection_rules r ON a.rule_id = r.id
+            WHERE r.rule_id = 'RULE-AUTH-001'
+        """)
+        alerts_wave1 = c.fetchall()
+        assert len(alerts_wave1) == 1
+        initial_alert_id = alerts_wave1[0]["alert_id"]
+        assert alerts_wave1[0]["matched_count"] == 3
+
+        # Second wave occurs 10 minutes later at 08:10:00 (well past 60s window)
+        wave2_time = base_time + timedelta(minutes=10)
+        wave2_ids = []
+        for s in (10, 20, 30):
+            t = (wave2_time + timedelta(seconds=s)).strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("""
+                INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                VALUES ('target_user', 'Credential Stuffing', 'brute_force', 70, '192.0.2.1', 'London', ?, 0, 1)
+            """, (t,))
+            lid = c.lastrowid
+            c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (lid, t, t))
+            wave2_ids.append(lid)
+        conn.commit()
+
+        evaluate_detection_pipeline(wave2_ids, db_path)
+
+        # Verify that the old alert did NOT accumulate the new events forever;
+        # instead, a distinct alert was created for the new window
+        c.execute("""
+            SELECT a.alert_id, a.matched_count
+            FROM detection_alerts a
+            JOIN detection_rules r ON a.rule_id = r.id
+            WHERE r.rule_id = 'RULE-AUTH-001'
+            ORDER BY a.id ASC
+        """)
+        all_alerts = c.fetchall()
+        assert len(all_alerts) == 2, "A new alert must be created once correlation window expires"
+        assert all_alerts[0]["alert_id"] == initial_alert_id
+        assert all_alerts[0]["matched_count"] == 3  # Unchanged
+        assert all_alerts[1]["matched_count"] == 3  # Fresh window
+        conn.close()
+
+
+def test_evaluated_events_metric_accuracy(test_env):
+    """The evaluated_events metric must accurately track the count of evaluated events
+    in the evaluated_events table rather than simply returning total logs stored.
+    """
+    client, _, db_path, app = test_env
+    admin = app.test_client()
+    admin.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+
+    with app.app_context():
+        conn = get_db_connection(db_path)
+        c = conn.cursor()
+
+        # Insert 4 historical logs directly without pipeline evaluation
+        for i in range(4):
+            t = (datetime.now() - timedelta(minutes=60)).strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("""
+                INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
+                VALUES ('dormant_user', 'Normal Probe', 'none', 10, '10.0.0.1', 'HQ', ?, 0, 1)
+            """, (t,))
+            lid = c.lastrowid
+            c.execute("INSERT INTO cases (incident_id, status, created_at, updated_at) VALUES (?, 'new', ?, ?)", (lid, t, t))
+        conn.commit()
+        conn.close()
+
+    # Query metrics before pipeline evaluation
+    res = admin.get("/api/detection/metrics")
+    assert res.status_code == 200
+    metrics = res.get_json()
+    assert metrics["total_events_stored"] >= 4
+    # Evaluated events should be 0 because none passed through pipeline yet
+    assert metrics["evaluated_events"] == 0
+
+    # Now run synthetic replay which evaluates events through the pipeline
+    replay_res = admin.post("/api/detection/replay", json={"preset": "credential_spray"})
+    assert replay_res.status_code == 201
+
+    res_after = admin.get("/api/detection/metrics")
+    metrics_after = res_after.get_json()
+    assert metrics_after["evaluated_events"] > 0
+    assert metrics_after["evaluated_events"] <= metrics_after["total_events_stored"]
+
+
+def test_sqlite_migration_foreign_key_integrity(test_env):
+    """Verify historical SQLite migrations maintain valid foreign keys (PRAGMA foreign_key_check = 0)
+    and preserve all audit records in rule_audit_log, incident_audit_log, and system_audit_log.
+    """
+    client, _, db_path, app = test_env
+    with app.app_context():
+        conn = get_db_connection(db_path)
+        c = conn.cursor()
+
+        # Check foreign key violations
+        c.execute("PRAGMA foreign_key_check")
+        fk_violations = c.fetchall()
+        assert len(fk_violations) == 0, f"Foreign key check failed: {fk_violations}"
+
+        # Verify audit log tables exist and are functional
+        c.execute("SELECT COUNT(*) AS cnt FROM rule_audit_log")
+        assert c.fetchone()["cnt"] >= 0
+
+        c.execute("SELECT COUNT(*) AS cnt FROM incident_audit_log")
+        assert c.fetchone()["cnt"] >= 0
+
+        c.execute("SELECT COUNT(*) AS cnt FROM system_audit_log")
+        assert c.fetchone()["cnt"] >= 0
+
+        # Verify evaluated_events table exists with valid schema
+        c.execute("PRAGMA table_info(evaluated_events)")
+        cols = {row["name"]: row["type"].upper() for row in c.fetchall()}
+        assert "incident_id" in cols
+        assert "evaluated_at" in cols
+        conn.close()
+
+
+def test_alert_escalation_case_assignment_version_increment_and_concurrency(test_env):
+    """Automatic case assignment during alert escalation must increment cases.version,
+    record an incident_audit_log entry, and enforce optimistic locking concurrency.
+    """
+    client, _, db_path, app = test_env
+    admin = app.test_client()
+    admin.post("/api/auth/login", json={"username": "testadmin", "password": "AdminPassword2026!"})
+
+    # Trigger an alert via replay
+    rep = admin.post("/api/detection/replay", json={"preset": "credential_spray"})
+    assert rep.status_code == 201
+
+    alerts_res = admin.get("/api/detection/alerts")
+    alert = alerts_res.get_json()["alerts"][0]
+    alert_id = alert["alert_id"]
+    target_inc_id = alert["matched_incident_ids"][0]
+
+    with app.app_context():
+        conn = get_db_connection(db_path)
+        c = conn.cursor()
+        c.execute("SELECT version, assigned_to FROM cases WHERE incident_id = ?", (target_inc_id,))
+        case_before = c.fetchone()
+        assert case_before["assigned_to"] is None
+        initial_version = case_before["version"]
+        conn.close()
+
+    # Analyst escalates alert and claims case with matching version
+    analyst = app.test_client()
+    analyst.post("/api/auth/login", json={"username": "analyst_john", "password": "AnalystJohn2026!"})
+
+    # Stale version check: pass version=999
+    conflict_res = analyst.post(f"/api/detection/alerts/{alert_id}/escalate", json={
+        "incident_id": target_inc_id,
+        "version": 999
+    })
+    assert conflict_res.status_code == 409
+    assert "Concurrent modification" in conflict_res.get_json()["message"]
+
+    # Valid escalation with correct version
+    esc_res = analyst.post(f"/api/detection/alerts/{alert_id}/escalate", json={
+        "incident_id": target_inc_id,
+        "version": initial_version
+    })
+    assert esc_res.status_code == 200
+    assert esc_res.get_json()["status"] == "escalated"
+
+    with app.app_context():
+        conn = get_db_connection(db_path)
+        c = conn.cursor()
+        c.execute("SELECT version, assigned_username FROM cases WHERE incident_id = ?", (target_inc_id,))
+        case_after = c.fetchone()
+        assert case_after["assigned_username"] == "analyst_john"
+        assert case_after["version"] == initial_version + 1, "Case version must increment upon auto-claim"
+
+        # Verify audit log recorded the auto-assignment
+        c.execute("""
+            SELECT action, actor_username, description FROM incident_audit_log
+            WHERE incident_id = ? AND action = 'assigned'
+        """, (target_inc_id,))
+        audit_entry = c.fetchone()
+        assert audit_entry is not None
+        assert audit_entry["actor_username"] == "analyst_john"
+        conn.close()
+

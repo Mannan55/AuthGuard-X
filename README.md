@@ -173,7 +173,7 @@ AuthGuard-X features a database-backed detection rule engine and a sliding time-
 | `RULE-AUTH-001` | Single-Account Brute Force & Credential Stuffing | [T1110.001](https://attack.mitre.org/techniques/T1110/001/) | Brute Force: Password Guessing | 60s / 3 per target username | Critical |
 | `RULE-NET-002` | Port Scanning Reconnaissance Probe | [T1046](https://attack.mitre.org/techniques/T1046/) | Network Service Discovery | 45s / 3 per source IP (scan behavior + risk >= 50) | High |
 | `RULE-EXPLOIT-003` | Lateral SMB Named Pipe Traversal | [T1021.002](https://attack.mitre.org/techniques/T1021/002/) | Remote Services: SMB/Windows Admin Shares | 0s / 1 event (lateral attribute + risk >= 75) | Critical |
-| `RULE-BURST-004` | Multi-Target Password Spraying | [T1110.003](https://attack.mitre.org/techniques/T1110/003/) | Brute Force: Password Spraying | 120s / 5 total events | High |
+| `RULE-BURST-004` | Multi-Target Password Spraying | [T1110.003](https://attack.mitre.org/techniques/T1110/003/) | Brute Force: Password Spraying | 120s / 5 distinct target accounts | High |
 | `RULE-BEHAV-005` | Multi-Behavior Anomaly Chain | [T1078](https://attack.mitre.org/techniques/T1078/) | Valid Accounts | 180s / 2 distinct non-empty behaviors | Medium |
 | `RULE-KERB-006` | Active Directory Kerberoasting | [T1558.003](https://attack.mitre.org/techniques/T1558/003/) | Steal or Forge Kerberos Tickets: Kerberoasting | 0s / 1 event (SPN extraction) | High |
 
@@ -197,7 +197,7 @@ AuthGuard-X features a database-backed detection rule engine and a sliding time-
 - **Traffic Protection**: `Flask-Limiter` (IP-based endpoint rate throttling)
 - **Frontend Architecture**: Modular Vanilla JavaScript (ES6+), design tokens (`tokens.css`), responsive layout (`layout.css`), accessible components (`components.css`), Chart.js
 - **Database Engine**: SQLite3 with strict foreign keys (`PRAGMA foreign_keys = ON`), indexed lookups, and idempotent migrations
-- **Automated QA**: Pytest suite (116 tests across 4 suites) and headless Chrome CDP browser automation (24 real assertions)
+- **Automated QA**: Pytest suite (122 tests across 4 suites) and headless Chrome CDP browser automation (24 real assertions)
 
 ---
 
@@ -267,18 +267,18 @@ Default development accounts:
 The project includes two comprehensive layers of automated verification:
 
 ```powershell
-# 1. Run the complete Pytest suite (116 tests)
+# 1. Run the complete Pytest suite (122 tests)
 pytest tests -v
 
 # 2. Run real-browser visual and functional verification (24 assertions + screenshots)
 python scripts/capture_evidence.py
 ```
 
-### Test Suite Distribution (116 Tests Total)
+### Test Suite Distribution (122 Tests Total)
 - **Phase 1 Baseline** (`tests/test_auth_guard.py` — 15 tests): Health check, login validation, session state, unauthenticated access blocking, and persistence across restarts.
 - **Sprint 1 Professional UI & Hardening** (`tests/test_sprint1.py` — 54 tests): CSRF validation, simulation provenance enforcement, server-derived metrics, pagination envelopes, search/filter/sort allowlists, detail endpoints, and XSS resistance.
 - **Sprint 2 Advanced SOC Investigation & Security Corrections** (`tests/test_sprint2.py` — 29 tests): Idempotent database migrations, automatic case creation, 4-stage lifecycle state machine, reopening workflow with incrementing `reopen_count`, mandatory resolution summary, strict case ownership enforcement (Analyst A cannot resolve Analyst B's cases), auto-claim policy on unassigned cases, strengthened optimistic concurrency locking with strict boolean and malformed value rejection (`version` validation, 428 Precondition Required for missing, 400 for malformed/booleans, 409 for conflict), multi-client simultaneous race safety, URI scheme safety validation for evidence, administrative log purge protection with mandatory reason and persistent `system_audit_log`, personal queue isolation, single Investigate handler deduplication, and CSRF enforcement on case APIs.
-- **Sprint 3 Detection Engineering & Threat Correlation** (`tests/test_sprint3.py` — 18 tests): Default rule seeding with verified MITRE ATT&CK techniques, schema-constrained condition validation rejecting `eval()` and injection payloads, rule CRUD with RBAC enforcement and optimistic concurrency locking, sliding time-window threat correlation with state updating across IP and username grouping, SHA-256 idempotency hashing preventing duplicate alerts, safe rule archival retaining historical alerts, execution records, audit logs, and case linkages, cross-analyst alert escalation ownership validation (403 for unauthorized analysts, 409 for duplicate escalation), alert closure, synthetic threat replay scenarios, and real telemetry analytics.
+- **Sprint 3 Detection Engineering, Threat Correlation & Hardening** (`tests/test_sprint3.py` — 24 tests): Default rule seeding with verified MITRE ATT&CK techniques, exact sliding-window duration enforcement (60s, 45s, 120s, 180s), multi-target password spraying requiring distinct accounts, schema-constrained condition validation rejecting `eval()` and injection payloads, rule CRUD with RBAC enforcement and optimistic concurrency locking, sliding time-window threat correlation with state updating and window expiration preventing infinite accumulation, SHA-256 idempotency hashing preventing duplicate alerts, safe rule archival retaining historical alerts, execution records, audit logs, and case linkages, cross-analyst alert escalation ownership validation, automatic case assignment with version incrementing and concurrency conflict protection, alert closure, synthetic threat replay scenarios, SQLite foreign key integrity (`PRAGMA foreign_key_check = 0`), and accurate `evaluated_events` tracking via dedicated telemetry ledger.
 
 ---
 

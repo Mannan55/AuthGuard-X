@@ -37,7 +37,7 @@ DEFAULT_DETECTION_RULES = [
     {
         "rule_id": "RULE-AUTH-001",
         "name": "Single-Account Brute Force & Credential Stuffing",
-        "description": "Correlates multiple authentication attacks or credential stuffing attempts targeting a single account within a 5-minute detection window.",
+        "description": "Correlates multiple authentication attacks or credential stuffing attempts targeting a single account within a 60-second detection window.",
         "severity": "high",
         "status": "enabled",
         "conditions_json": json.dumps([
@@ -45,7 +45,7 @@ DEFAULT_DETECTION_RULES = [
             {"field": "risk", "operator": "gte", "value": 50}
         ]),
         "threshold": 3,
-        "time_window_seconds": 300,
+        "time_window_seconds": 60,
         "group_by_field": "username",
         "mitre_technique_id": "T1110.001",
         "mitre_technique_name": "Brute Force: Password Guessing",
@@ -55,7 +55,7 @@ DEFAULT_DETECTION_RULES = [
     {
         "rule_id": "RULE-NET-002",
         "name": "Source IP Port Scanning & Reconnaissance Probe",
-        "description": "Correlates repeated network reconnaissance probes or port scan behavior originating from the same source IP.",
+        "description": "Correlates repeated network reconnaissance probes or port scan behavior originating from the same source IP within a 45-second detection window.",
         "severity": "medium",
         "status": "enabled",
         "conditions_json": json.dumps([
@@ -63,7 +63,7 @@ DEFAULT_DETECTION_RULES = [
             {"field": "risk", "operator": "gte", "value": 50}
         ]),
         "threshold": 3,
-        "time_window_seconds": 600,
+        "time_window_seconds": 45,
         "group_by_field": "ip",
         "mitre_technique_id": "T1046",
         "mitre_technique_name": "Network Service Discovery",
@@ -91,7 +91,7 @@ DEFAULT_DETECTION_RULES = [
     {
         "rule_id": "RULE-BURST-004",
         "name": "Distributed Multi-Target Password Spraying",
-        "description": "Detects widespread authentication attacks distributed across multiple distinct user accounts within a 3-minute evaluation window.",
+        "description": "Detects widespread authentication attacks distributed across multiple distinct user accounts within a 120-second evaluation window.",
         "severity": "high",
         "status": "enabled",
         "conditions_json": json.dumps([
@@ -99,7 +99,7 @@ DEFAULT_DETECTION_RULES = [
             {"field": "risk", "operator": "gte", "value": 40}
         ]),
         "threshold": 5,
-        "time_window_seconds": 180,
+        "time_window_seconds": 120,
         "group_by_field": "none",
         "mitre_technique_id": "T1110.003",
         "mitre_technique_name": "Brute Force: Password Spraying",
@@ -109,7 +109,7 @@ DEFAULT_DETECTION_RULES = [
     {
         "rule_id": "RULE-BEHAV-005",
         "name": "Multi-Behavior Account Anomaly",
-        "description": "Flags accounts exhibiting distinct abnormal behavioral patterns within a 10-minute sliding window.",
+        "description": "Flags accounts exhibiting distinct abnormal behavioral patterns within a 180-second sliding window.",
         "severity": "medium",
         "status": "enabled",
         "conditions_json": json.dumps([
@@ -117,7 +117,7 @@ DEFAULT_DETECTION_RULES = [
             {"field": "risk", "operator": "gte", "value": 30}
         ]),
         "threshold": 2,
-        "time_window_seconds": 600,
+        "time_window_seconds": 180,
         "group_by_field": "username",
         "mitre_technique_id": "T1078",
         "mitre_technique_name": "Valid Accounts",
@@ -395,6 +395,15 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
         )
     ''')
 
+    # Sprint 3: Evaluated Telemetry Events tracking table (actual evaluated events count)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS evaluated_events (
+            incident_id INTEGER PRIMARY KEY,
+            evaluated_at TEXT NOT NULL,
+            FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE CASCADE
+        )
+    ''')
+
     # Ensure foreign keys are temporarily disabled during schema alterations so SQLite
     # does not automatically rewrite foreign keys in referencing tables to temporary names.
     c.execute("PRAGMA foreign_keys = OFF")
@@ -524,6 +533,12 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
 
     c.execute("PRAGMA foreign_keys = ON")
 
+    # Verify foreign key integrity across all tables
+    c.execute("PRAGMA foreign_key_check")
+    fk_errors = c.fetchall()
+    if fk_errors:
+        print(f"[Database] Warning: SQLite foreign key integrity check found violations: {fk_errors}")
+
     # Sprint 3: Performance indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_rules_status ON detection_rules(status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_rules_severity ON detection_rules(severity)")
@@ -533,6 +548,7 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
     c.execute("CREATE INDEX IF NOT EXISTS idx_alerts_linked_case ON detection_alerts(linked_incident_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_rule_audit_rule ON rule_audit_log(rule_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_rule_exec_rule ON rule_executions(rule_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_eval_events_id ON evaluated_events(incident_id)")
 
     # Idempotent seeding and safe migration of default detection rules
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1032,6 +1048,13 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
                     if tr["id"] not in existing_ids:
                         recent_logs.append(tr)
 
+            # Record verified evaluated incidents into evaluated_events
+            for inc in recent_logs:
+                c.execute("""
+                    INSERT OR IGNORE INTO evaluated_events (incident_id, evaluated_at)
+                    VALUES (?, ?)
+                """, (inc["id"], now_str))
+
             matching_incidents = [inc for inc in recent_logs if incident_matches_rule(inc, conditions)]
             if not matching_incidents:
                 continue
@@ -1053,18 +1076,26 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
                     if len(distinct_behaviors) < rule["threshold"]:
                         continue
 
+                # Distinct target usernames check for multi-target password spraying rule
+                if rule["rule_id"] == "RULE-BURST-004":
+                    distinct_users = {inc.get("username") for inc in matched_list if inc.get("username") and str(inc.get("username")).strip()}
+                    if len(distinct_users) < rule["threshold"]:
+                        continue
+
                 if len(matched_list) >= rule["threshold"]:
                     sorted_ids = sorted([inc["id"] for inc in matched_list])
                     correlation_key = f"{rule['rule_id']}:{group_by}:{group_key}" if group_by != "none" else f"{rule['rule_id']}:global"
 
                     # Stable correlation identity & alert update / suppression strategy
                     # Check for an active (open or investigating) alert for this rule & correlation_key
+                    # that is STILL within the active correlation window (last_event_time >= cutoff)
                     c.execute("""
-                        SELECT id, alert_id, matched_incident_ids_json, last_event_time, matched_count, explanation
+                        SELECT id, alert_id, matched_incident_ids_json, first_event_time, last_event_time, matched_count, explanation
                         FROM detection_alerts
                         WHERE rule_id = ? AND correlation_key = ? AND status IN ('open', 'investigating')
+                          AND last_event_time >= ?
                         ORDER BY updated_at DESC LIMIT 1
-                    """, (rule["id"], correlation_key))
+                    """, (rule["id"], correlation_key, cutoff))
                     active_alert = c.fetchone()
 
                     if active_alert:
@@ -1078,11 +1109,35 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
                         if current_ids.issubset(existing_ids):
                             continue
 
-                        # If new events exist, update existing active alert instead of creating a duplicate overlapping alert
                         latest_new_event_time = max(inc["time"] for inc in matched_list)
+
+                        # Enforce maximum correlation window duration: an alert cannot accumulate events
+                        # spanning beyond the rule's time_window_seconds from its first_event_time
+                        try:
+                            first_dt = datetime.strptime(active_alert["first_event_time"], "%Y-%m-%d %H:%M:%S")
+                            latest_dt = datetime.strptime(latest_new_event_time, "%Y-%m-%d %H:%M:%S")
+                            span_seconds = abs((latest_dt - first_dt).total_seconds())
+                        except Exception:
+                            span_seconds = 0
+
+                        # If the new events exceed the window span from the alert's first event,
+                        # the correlation window has expired - do not accumulate indefinitely.
+                        # Instead, let the new events establish a fresh correlation alert.
+                        if span_seconds > window_seconds:
+                            active_alert = None
+
+                    if active_alert:
                         combined_ids = sorted(list(existing_ids.union(current_ids)))
                         cond_desc = " AND ".join(f"{cd['field']} {cd['operator']} {cd['value']}" for cd in conditions)
-                        if group_by == "none":
+                        if rule["rule_id"] == "RULE-BURST-004":
+                            all_users = sorted({inc.get("username") for inc in matched_list if inc.get("username") and str(inc.get("username")).strip()})
+                            explanation = (
+                                f"Rule '{rule['name']}' ({rule['rule_id']}) correlation updated: "
+                                f"multi-target password spray detected across {len(all_users)} distinct user accounts ({', '.join(all_users[:6])}) "
+                                f"with {len(combined_ids)} correlated events within a {window_seconds}s detection window (threshold: {rule['threshold']}). "
+                                f"Correlated incidents: {', '.join('#' + str(i) for i in combined_ids[:8])}."
+                            )
+                        elif group_by == "none":
                             explanation = (
                                 f"Rule '{rule['name']}' ({rule['rule_id']}) correlation updated: "
                                 f"{len(combined_ids)} security events satisfied conditions [{cond_desc}] "
@@ -1146,6 +1201,14 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
                             f"Rule '{rule['name']}' ({rule['rule_id']}) triggered on account '{group_key}': "
                             f"exhibited {len(distinct_behaviors)} distinct abnormal behaviors ({', '.join(distinct_behaviors)}) "
                             f"across {len(matched_list)} correlated events within a {window_seconds}s detection window (threshold: {rule['threshold']}). "
+                            f"Correlated incidents: {', '.join('#' + str(i['id']) for i in matched_list[:8])}."
+                        )
+                    elif rule["rule_id"] == "RULE-BURST-004":
+                        distinct_users = sorted({inc.get("username") for inc in matched_list if inc.get("username") and str(inc.get("username")).strip()})
+                        explanation = (
+                            f"Rule '{rule['name']}' ({rule['rule_id']}) triggered: "
+                            f"multi-target password spray detected across {len(distinct_users)} distinct user accounts ({', '.join(distinct_users[:6])}) "
+                            f"with {len(matched_list)} correlated events within a {window_seconds}s detection window (threshold: {rule['threshold']}). "
                             f"Correlated incidents: {', '.join('#' + str(i['id']) for i in matched_list[:8])}."
                         )
                     elif group_by == "none":
@@ -3714,13 +3777,43 @@ def create_app(test_config=None) -> Flask:
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Auto-claim unassigned case on escalation
+        # Auto-claim unassigned case on escalation and increment version for concurrency safety
         if case_row and case_row["assigned_to"] is None and caller_id:
+            if "version" in data and data["version"] is not None:
+                expected_version, err_resp = _validate_case_version(
+                    data.get("version"),
+                    require_version=True,
+                    operation_desc="escalating alert and claiming case"
+                )
+                if err_resp:
+                    conn.close()
+                    return err_resp
+                c.execute("SELECT version FROM cases WHERE incident_id = ?", (target_incident_id,))
+                ver_row = c.fetchone()
+                current_ver = ver_row["version"] if ver_row else case_row["version"]
+                if expected_version != current_ver:
+                    conn.close()
+                    return jsonify({
+                        "error": "Conflict",
+                        "message": f"Concurrent modification detected. Expected version {expected_version}, but case is at version {current_ver}.",
+                        "current_version": current_ver
+                    }), 409
+
             c.execute("""
                 UPDATE cases
-                SET assigned_to = ?, assigned_username = ?, updated_at = ?
+                SET assigned_to = ?, assigned_username = ?, updated_at = ?, version = version + 1
                 WHERE incident_id = ?
             """, (caller_id, user_name, now_str, target_incident_id))
+
+            c.execute("""
+                INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at)
+                VALUES (?, ?, ?, 'assigned', 'unassigned', ?, ?, ?)
+            """, (
+                target_incident_id, caller_id, user_name,
+                f"assigned_to:{caller_id}:{user_name}",
+                f"Case #{target_incident_id} automatically claimed by {user_name} upon alert escalation",
+                now_str
+            ))
 
         # Atomic update of alert status and linkage
         c.execute("""
@@ -3818,6 +3911,9 @@ def create_app(test_config=None) -> Flask:
         c.execute("SELECT COUNT(*) AS total_logs FROM logs")
         total_events_stored = c.fetchone()["total_logs"]
 
+        c.execute("SELECT COUNT(*) AS evaluated_count FROM evaluated_events")
+        actual_evaluated_events = c.fetchone()["evaluated_count"]
+
         c.execute("SELECT COUNT(*) AS exec_count FROM rule_executions")
         rule_executions_count = c.fetchone()["exec_count"]
 
@@ -3862,7 +3958,7 @@ def create_app(test_config=None) -> Flask:
             "open_alerts": open_alerts,
             "escalated_alerts": escalated_alerts,
             "closed_alerts": closed_alerts,
-            "evaluated_events": total_events_stored,
+            "evaluated_events": actual_evaluated_events,
             "total_events_stored": total_events_stored,
             "rule_executions_count": rule_executions_count,
             "active_correlations_count": active_correlations_count,
@@ -3902,10 +3998,10 @@ def create_app(test_config=None) -> Flask:
                 injected_ids.append(log_id)
 
         if preset in ("recon_burst", "all"):
-            # 3 port scan events from single source IP (satisfies RULE-NET-002)
+            # 3 port scan events from single source IP (satisfies RULE-NET-002 within 45s window)
             recon_ip = "198.51.100.42"
             for i in range(3):
-                t_str = (now - timedelta(seconds=30 * (3 - i))).strftime("%Y-%m-%d %H:%M:%S")
+                t_str = (now - timedelta(seconds=10 * (3 - i))).strftime("%Y-%m-%d %H:%M:%S")
                 c.execute("""
                     INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
                     VALUES ('service_scanner', 'Network Reconnaissance Probe', 'port_scan', 55, ?, 'Frankfurt, Germany', ?, 0, 1)
