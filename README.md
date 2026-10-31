@@ -5,7 +5,7 @@
 [![Flask](https://img.shields.io/badge/backend-Flask%203.1-black.svg)](https://flask.palletsprojects.com/)
 [![SQLite 3](https://img.shields.io/badge/database-SQLite%203%20WAL-lightgrey.svg)](https://www.sqlite.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release: v3.0.0](https://img.shields.io/badge/release-v1.0.0-green.svg)](https://github.com/Mannan55/AuthGuard-X/releases/tag/v3)
+[![Release: v3](https://img.shields.io/badge/release-v1.0.0-green.svg)](https://github.com/Mannan55/AuthGuard-X/releases/tag/v3)
 
 AuthGuard-X is a professional, local-first Security Operations Center (SOC) demonstration, training, detection engineering, and incident response platform. Designed for cybersecurity analysts, educators, and blue teams, it models an enterprise identity and network security monitoring environment that ingests multi-format security logs, runs sliding-window detection rules, correlates threats against MITRE ATT&CK techniques, manages investigations through a 4-stage lifecycle state machine, and generates evidence-grounded investigation reports.
 
