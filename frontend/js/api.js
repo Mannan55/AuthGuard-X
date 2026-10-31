@@ -418,6 +418,72 @@
         const qs = query.toString();
         return `/api/ingestion/export${qs ? `?${qs}` : ''}`;
       }
+    },
+    reports: {
+      async list(params = {}) {
+        const query = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && v !== '' && v !== 'all') {
+            query.append(k, v);
+          }
+        });
+        const qs = query.toString();
+        return apiFetch(`/api/reports${qs ? `?${qs}` : ''}`);
+      },
+      async get(reportId) {
+        return apiFetch(`/api/reports/${encodeURIComponent(reportId)}`);
+      },
+      async create(payload) {
+        return apiFetch('/api/reports', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      },
+      async update(reportId, payload) {
+        return apiFetch(`/api/reports/${encodeURIComponent(reportId)}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload)
+        });
+      },
+      async setStatus(reportId, payload) {
+        return apiFetch(`/api/reports/${encodeURIComponent(reportId)}/status`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      },
+      async revise(reportId, payload = {}) {
+        return apiFetch(`/api/reports/${encodeURIComponent(reportId)}/revise`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      },
+      async linkEvidence(reportId, payload) {
+        return apiFetch(`/api/reports/${encodeURIComponent(reportId)}/evidence`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      },
+      async unlinkEvidence(reportId, linkId) {
+        return apiFetch(`/api/reports/${encodeURIComponent(reportId)}/evidence/${encodeURIComponent(linkId)}`, {
+          method: 'DELETE'
+        });
+      },
+      async getTimeline(reportId, params = {}) {
+        const query = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && v !== '' && v !== 'all') {
+            query.append(k, v);
+          }
+        });
+        const qs = query.toString();
+        return apiFetch(`/api/reports/${encodeURIComponent(reportId)}/timeline${qs ? `?${qs}` : ''}`);
+      },
+      getExportHtmlUrl(reportId) {
+        return `/api/reports/${encodeURIComponent(reportId)}/export/html`;
+      },
+      getExportJsonUrl(reportId) {
+        return `/api/reports/${encodeURIComponent(reportId)}/export/json`;
+      }
     }
   };
 

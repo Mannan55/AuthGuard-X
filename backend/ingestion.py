@@ -325,6 +325,52 @@ def detect_format(content: str, filename: str = "") -> str:
     return "canonical_csv"
 
 
+def extract_forensic_payload(
+    raw_source_text: Optional[str],
+    reconstructed_text: Optional[str] = None,
+    source_format: str = "canonical_csv"
+) -> Dict[str, Any]:
+    """
+    Distinguishes the exact SHA-256 digest of source record bytes from
+    a bounded, decoded, normalized, or reconstructed representation.
+    Never labels a reconstructed row as original raw bytes.
+    Preserves explicit truncation and provenance metadata.
+    """
+    if raw_source_text is not None and str(raw_source_text).strip() != "":
+        raw_bytes = raw_source_text.encode("utf-8")
+        raw_bytes_hash = hashlib.sha256(raw_bytes).hexdigest()
+        is_truncated = len(raw_bytes) > MAX_RAW_PAYLOAD_SIZE
+        payload_str = raw_source_text[:MAX_RAW_PAYLOAD_SIZE]
+        normalized_hash = hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
+        return {
+            "raw_payload": payload_str,
+            "raw_hash": raw_bytes_hash,
+            "raw_bytes_hash": raw_bytes_hash,
+            "normalized_payload_hash": normalized_hash,
+            "payload_type": "exact_source_line",
+            "payload_provenance": "verbatim_source_text",
+            "is_truncated": is_truncated,
+            "original_byte_length": len(raw_bytes)
+        }
+    else:
+        # Reconstructed representation: explicitly state reconstructed provenance
+        reconstructed_str = reconstructed_text or "{}"
+        rec_bytes = reconstructed_str.encode("utf-8")
+        is_truncated = len(rec_bytes) > MAX_RAW_PAYLOAD_SIZE
+        payload_str = reconstructed_str[:MAX_RAW_PAYLOAD_SIZE]
+        normalized_hash = hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
+        return {
+            "raw_payload": payload_str,
+            "raw_hash": normalized_hash,
+            "raw_bytes_hash": None,  # NEVER label reconstructed representation as raw source bytes!
+            "normalized_payload_hash": normalized_hash,
+            "payload_type": f"reconstructed_{source_format}_row",
+            "payload_provenance": "reconstructed_representation",
+            "is_truncated": is_truncated,
+            "original_byte_length": len(rec_bytes)
+        }
+
+
 class IngestionParser:
     """Parses and normalizes security logs from different structured formats."""
 
@@ -333,6 +379,7 @@ class IngestionParser:
         """Parse Canonical CSV format with flexible headers."""
         records = []
         errors = []
+        raw_lines = [l for l in content.splitlines() if l.strip()]
         reader = csv.DictReader(io.StringIO(content))
 
         # Check for empty or missing headers
@@ -397,16 +444,28 @@ class IngestionParser:
 
             behavior = get_col(row, "behavior", "details", "desc", default=f"{attack} from {ip}")
 
-            # Bounded raw payload & integrity hash
-            raw_payload = json.dumps(row, sort_keys=True)[:MAX_RAW_PAYLOAD_SIZE]
-            raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+            # Precise source evidence extraction
+            source_line = raw_lines[idx] if idx < len(raw_lines) else None
+            forensic = extract_forensic_payload(
+                raw_source_text=source_line,
+                reconstructed_text=json.dumps(row, sort_keys=True),
+                source_format="canonical_csv"
+            )
 
             field_provenance = {
                 "source_ip": "observed" if ip else "unavailable",
                 "dest_ip": "observed" if dest_ip else "unavailable",
                 "username": "observed" if username else "unavailable",
                 "hostname": "observed" if hostname else "unavailable",
-                "event_time": "observed"
+                "event_time": "observed",
+                "raw_evidence": {
+                    "payload_type": forensic["payload_type"],
+                    "payload_provenance": forensic["payload_provenance"],
+                    "is_truncated": forensic["is_truncated"],
+                    "original_byte_length": forensic["original_byte_length"],
+                    "exact_source_bytes_hash": forensic["raw_bytes_hash"],
+                    "normalized_payload_hash": forensic["normalized_payload_hash"]
+                }
             }
 
             record = {
@@ -429,8 +488,14 @@ class IngestionParser:
                 "source_event_id": source_event_id,
                 "source_record_ref": f"csv_row_{idx}",
                 "field_provenance": field_provenance,
-                "raw_payload": raw_payload,
-                "raw_hash": raw_hash,
+                "raw_payload": forensic["raw_payload"],
+                "raw_hash": forensic["raw_hash"],
+                "raw_bytes_hash": forensic["raw_bytes_hash"],
+                "normalized_payload_hash": forensic["normalized_payload_hash"],
+                "raw_payload_type": forensic["payload_type"],
+                "raw_payload_provenance": forensic["payload_provenance"],
+                "is_truncated": forensic["is_truncated"],
+                "original_byte_length": forensic["original_byte_length"],
                 "metadata": {k: v for k, v in row.items() if v}
             }
             records.append(record)
@@ -448,7 +513,7 @@ class IngestionParser:
         if clean.startswith("[") and clean.endswith("]"):
             try:
                 items = json.loads(clean)
-                lines = [(i + 1, item, json.dumps(item, sort_keys=True)) for i, item in enumerate(items)]
+                lines = [(i + 1, item, json.dumps(item, sort_keys=True), None) for i, item in enumerate(items)]
             except Exception as e:
                 return [], [{"record_index": 0, "error": f"Invalid JSON array: {str(e)}"}]
         else:
@@ -459,11 +524,11 @@ class IngestionParser:
                 if not line_str:
                     continue
                 try:
-                    lines.append((idx, json.loads(line_str), line_str))
+                    lines.append((idx, json.loads(line_str), line_str, line_str))
                 except Exception as e:
                     errors.append({"record_index": idx, "error": f"Malformed JSON: {str(e)}", "raw": line_str[:60]})
 
-        for idx, item, raw_text in lines:
+        for idx, item, raw_text, source_line in lines:
             if idx > MAX_RECORDS_PER_BATCH:
                 errors.append({"record_index": idx, "error": f"Batch limit exceeded (maximum {MAX_RECORDS_PER_BATCH} records)"})
                 break
@@ -505,15 +570,26 @@ class IngestionParser:
 
             behavior = str(item.get("behavior") or item.get("details") or f"{attack} observed")
 
-            raw_payload = raw_text[:MAX_RAW_PAYLOAD_SIZE]
-            raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+            forensic = extract_forensic_payload(
+                raw_source_text=source_line,
+                reconstructed_text=raw_text,
+                source_format="ndjson"
+            )
 
             field_provenance = {
                 "source_ip": "observed" if ip else "unavailable",
                 "dest_ip": "observed" if dest_ip else "unavailable",
                 "username": "observed" if username else "unavailable",
                 "hostname": "observed" if hostname else "unavailable",
-                "event_time": "observed"
+                "event_time": "observed",
+                "raw_evidence": {
+                    "payload_type": forensic["payload_type"],
+                    "payload_provenance": forensic["payload_provenance"],
+                    "is_truncated": forensic["is_truncated"],
+                    "original_byte_length": forensic["original_byte_length"],
+                    "exact_source_bytes_hash": forensic["raw_bytes_hash"],
+                    "normalized_payload_hash": forensic["normalized_payload_hash"]
+                }
             }
 
             records.append({
@@ -536,8 +612,14 @@ class IngestionParser:
                 "source_event_id": source_event_id,
                 "source_record_ref": f"ndjson_line_{idx}",
                 "field_provenance": field_provenance,
-                "raw_payload": raw_payload,
-                "raw_hash": raw_hash,
+                "raw_payload": forensic["raw_payload"],
+                "raw_hash": forensic["raw_hash"],
+                "raw_bytes_hash": forensic["raw_bytes_hash"],
+                "normalized_payload_hash": forensic["normalized_payload_hash"],
+                "raw_payload_type": forensic["payload_type"],
+                "raw_payload_provenance": forensic["payload_provenance"],
+                "is_truncated": forensic["is_truncated"],
+                "original_byte_length": forensic["original_byte_length"],
                 "metadata": item
             })
 
@@ -558,12 +640,12 @@ class IngestionParser:
         items = []
         if clean.startswith("[") and clean.endswith("]"):
             try:
-                items = [(i + 1, item, json.dumps(item, sort_keys=True)) for i, item in enumerate(json.loads(clean))]
+                items = [(i + 1, item, json.dumps(item, sort_keys=True), None) for i, item in enumerate(json.loads(clean))]
             except Exception as e:
                 return [], [{"record_index": 0, "error": f"Invalid Windows JSON: {str(e)}"}]
         elif clean.startswith("{") and clean.endswith("}") and "\n{" not in clean:
             try:
-                items = [(1, json.loads(clean), clean)]
+                items = [(1, json.loads(clean), clean, clean)]
             except Exception as e:
                 return [], [{"record_index": 1, "error": f"Invalid Windows JSON: {str(e)}"}]
         else:
@@ -572,11 +654,11 @@ class IngestionParser:
                 if not line_str:
                     continue
                 try:
-                    items.append((idx, json.loads(line_str), line_str))
+                    items.append((idx, json.loads(line_str), line_str, line_str))
                 except Exception as e:
                     errors.append({"record_index": idx, "error": f"Malformed Windows event JSON: {str(e)}"})
 
-        for idx, obj, raw_text in items:
+        for idx, obj, raw_text, source_line in items:
             if idx > MAX_RECORDS_PER_BATCH:
                 errors.append({"record_index": idx, "error": f"Batch limit exceeded (maximum {MAX_RECORDS_PER_BATCH} records)"})
                 break
@@ -644,15 +726,26 @@ class IngestionParser:
                 severity = "low"
                 behavior = f"Successful logon for {username or 'unknown'} via LogonType {logon_type or 'unknown'}"
 
-            raw_payload = raw_text[:MAX_RAW_PAYLOAD_SIZE]
-            raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+            forensic = extract_forensic_payload(
+                raw_source_text=source_line,
+                reconstructed_text=raw_text,
+                source_format="windows_event"
+            )
 
             field_provenance = {
                 "source_ip": "observed" if ip else "unavailable",
                 "dest_ip": "unavailable",
                 "username": "observed" if username else "unavailable",
                 "hostname": "observed" if hostname else "unavailable",
-                "event_time": "observed"
+                "event_time": "observed",
+                "raw_evidence": {
+                    "payload_type": forensic["payload_type"],
+                    "payload_provenance": forensic["payload_provenance"],
+                    "is_truncated": forensic["is_truncated"],
+                    "original_byte_length": forensic["original_byte_length"],
+                    "exact_source_bytes_hash": forensic["raw_bytes_hash"],
+                    "normalized_payload_hash": forensic["normalized_payload_hash"]
+                }
             }
 
             records.append({
@@ -675,8 +768,14 @@ class IngestionParser:
                 "source_event_id": source_event_id,
                 "source_record_ref": f"EventID_{event_id}_record_{source_event_id or idx}",
                 "field_provenance": field_provenance,
-                "raw_payload": raw_payload,
-                "raw_hash": raw_hash,
+                "raw_payload": forensic["raw_payload"],
+                "raw_hash": forensic["raw_hash"],
+                "raw_bytes_hash": forensic["raw_bytes_hash"],
+                "normalized_payload_hash": forensic["normalized_payload_hash"],
+                "raw_payload_type": forensic["payload_type"],
+                "raw_payload_provenance": forensic["payload_provenance"],
+                "is_truncated": forensic["is_truncated"],
+                "original_byte_length": forensic["original_byte_length"],
                 "metadata": {
                     "EventID": event_id,
                     "LogonType": logon_type,
@@ -753,15 +852,25 @@ class IngestionParser:
                         severity = "medium"
                         behavior = f"SSH connection terminated during authentication for {username or 'unknown'}"
 
-                    raw_payload = clean_line[:MAX_RAW_PAYLOAD_SIZE]
-                    raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+                    forensic = extract_forensic_payload(
+                        raw_source_text=clean_line,
+                        source_format="linux_ssh"
+                    )
 
                     field_provenance = {
                         "source_ip": "observed",
                         "dest_ip": "unavailable",
                         "username": "observed" if username else "unavailable",
                         "hostname": "observed" if hostname else "unavailable",
-                        "event_time": "observed" if orig_tz != "local_syslog" else "inferred_year"
+                        "event_time": "observed" if orig_tz != "local_syslog" else "inferred_year",
+                        "raw_evidence": {
+                            "payload_type": forensic["payload_type"],
+                            "payload_provenance": forensic["payload_provenance"],
+                            "is_truncated": forensic["is_truncated"],
+                            "original_byte_length": forensic["original_byte_length"],
+                            "exact_source_bytes_hash": forensic["raw_bytes_hash"],
+                            "normalized_payload_hash": forensic["normalized_payload_hash"]
+                        }
                     }
 
                     records.append({
@@ -784,8 +893,14 @@ class IngestionParser:
                         "source_event_id": None,
                         "source_record_ref": f"syslog_line_{idx}",
                         "field_provenance": field_provenance,
-                        "raw_payload": raw_payload,
-                        "raw_hash": raw_hash,
+                        "raw_payload": forensic["raw_payload"],
+                        "raw_hash": forensic["raw_hash"],
+                        "raw_bytes_hash": forensic["raw_bytes_hash"],
+                        "normalized_payload_hash": forensic["normalized_payload_hash"],
+                        "raw_payload_type": forensic["payload_type"],
+                        "raw_payload_provenance": forensic["payload_provenance"],
+                        "is_truncated": forensic["is_truncated"],
+                        "original_byte_length": forensic["original_byte_length"],
                         "metadata": {
                             "port": port,
                             "raw_message": clean_line
@@ -812,7 +927,7 @@ class IngestionParser:
         items = []
         if clean.startswith("[") and clean.endswith("]"):
             try:
-                items = [(i + 1, item, json.dumps(item, sort_keys=True)) for i, item in enumerate(json.loads(clean))]
+                items = [(i + 1, item, json.dumps(item, sort_keys=True), None) for i, item in enumerate(json.loads(clean))]
             except Exception as e:
                 return [], [{"record_index": 0, "error": f"Invalid Zeek JSON array: {str(e)}"}]
         else:
@@ -821,11 +936,11 @@ class IngestionParser:
                 if not line_str:
                     continue
                 try:
-                    items.append((idx, json.loads(line_str), line_str))
+                    items.append((idx, json.loads(line_str), line_str, line_str))
                 except Exception as e:
                     errors.append({"record_index": idx, "error": f"Malformed Zeek JSON: {str(e)}"})
 
-        for idx, obj, raw_text in items:
+        for idx, obj, raw_text, source_line in items:
             if idx > MAX_RECORDS_PER_BATCH:
                 errors.append({"record_index": idx, "error": f"Batch limit exceeded (maximum {MAX_RECORDS_PER_BATCH} records)"})
                 break
@@ -875,15 +990,26 @@ class IngestionParser:
                 severity = "info"
                 behavior = f"Completed {proto} flow ({conn_state}) with {resp_h}:{resp_p}"
 
-            raw_payload = raw_text[:MAX_RAW_PAYLOAD_SIZE]
-            raw_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+            forensic = extract_forensic_payload(
+                raw_source_text=source_line,
+                reconstructed_text=raw_text,
+                source_format="zeek_conn"
+            )
 
             field_provenance = {
                 "source_ip": "observed" if orig_h else "unavailable",
                 "dest_ip": "observed" if resp_h else "unavailable",
                 "username": "unavailable",
                 "hostname": "unavailable",
-                "event_time": "observed"
+                "event_time": "observed",
+                "raw_evidence": {
+                    "payload_type": forensic["payload_type"],
+                    "payload_provenance": forensic["payload_provenance"],
+                    "is_truncated": forensic["is_truncated"],
+                    "original_byte_length": forensic["original_byte_length"],
+                    "exact_source_bytes_hash": forensic["raw_bytes_hash"],
+                    "normalized_payload_hash": forensic["normalized_payload_hash"]
+                }
             }
 
             records.append({
@@ -906,8 +1032,14 @@ class IngestionParser:
                 "source_event_id": str(uid) if uid else None,
                 "source_record_ref": f"zeek_uid_{uid}" if uid else f"zeek_line_{idx}",
                 "field_provenance": field_provenance,
-                "raw_payload": raw_payload,
-                "raw_hash": raw_hash,
+                "raw_payload": forensic["raw_payload"],
+                "raw_hash": forensic["raw_hash"],
+                "raw_bytes_hash": forensic["raw_bytes_hash"],
+                "normalized_payload_hash": forensic["normalized_payload_hash"],
+                "raw_payload_type": forensic["payload_type"],
+                "raw_payload_provenance": forensic["payload_provenance"],
+                "is_truncated": forensic["is_truncated"],
+                "original_byte_length": forensic["original_byte_length"],
                 "metadata": {
                     "proto": proto,
                     "service": service,

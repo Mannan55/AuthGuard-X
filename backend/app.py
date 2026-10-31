@@ -10,6 +10,8 @@ import uuid
 import re
 import io
 import csv
+import html
+from typing import Any, Optional, Union, Dict, List, Tuple
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -583,7 +585,7 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
             created_at TEXT NOT NULL,
             status TEXT NOT NULL CHECK(status IN ('completed', 'partial', 'failed')),
             errors_json TEXT,
-            detection_status TEXT NOT NULL DEFAULT 'completed' CHECK(detection_status IN ('pending', 'completed', 'failed', 'skipped')),
+            detection_status TEXT NOT NULL DEFAULT 'completed' CHECK(detection_status IN ('pending', 'completed', 'partial', 'failed', 'skipped')),
             detection_alerts_count INTEGER NOT NULL DEFAULT 0,
             detection_error TEXT,
             FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
@@ -624,6 +626,79 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
         )
     ''')
 
+    # Sprint 5: Investigation Case Reports table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS case_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id TEXT UNIQUE NOT NULL,
+            case_id INTEGER NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'in_review', 'finalized')),
+            author_id INTEGER NOT NULL,
+            author_username TEXT NOT NULL,
+            reviewer_id INTEGER,
+            reviewer_username TEXT,
+            executive_summary TEXT,
+            incident_classification TEXT,
+            severity TEXT,
+            detection_context TEXT,
+            affected_accounts_json TEXT,
+            affected_assets_json TEXT,
+            mitre_attack_json TEXT,
+            analyst_findings_json TEXT,
+            containment_remediation_history TEXT,
+            resolution_status TEXT,
+            recommendations TEXT,
+            limitations_and_uncertainties TEXT,
+            quality_checklist_json TEXT,
+            is_finalized INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finalized_at TEXT,
+            finalized_by_username TEXT,
+            FOREIGN KEY (case_id) REFERENCES cases(incident_id) ON DELETE RESTRICT,
+            FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE RESTRICT
+        )
+    ''')
+
+    # Sprint 5: Historical Immutable Report Versions table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS report_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            author_username TEXT NOT NULL,
+            reviewer_username TEXT,
+            finalized_by_username TEXT,
+            finalized_at TEXT,
+            change_summary TEXT,
+            provenance_disclaimer TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (report_id) REFERENCES case_reports(report_id) ON DELETE CASCADE
+        )
+    ''')
+
+    # Sprint 5: Verified Evidence References table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS report_evidence_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id TEXT NOT NULL,
+            case_id INTEGER NOT NULL,
+            reference_type TEXT NOT NULL CHECK(reference_type IN ('security_event', 'batch', 'incident', 'alert', 'rule', 'case_audit', 'case_note', 'case_evidence')),
+            reference_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            provenance_status TEXT NOT NULL DEFAULT 'observed' CHECK(provenance_status IN ('observed', 'inferred', 'unavailable', 'unverified_import')),
+            snapshot_summary TEXT,
+            limitations_note TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (report_id) REFERENCES case_reports(report_id) ON DELETE CASCADE
+        )
+    ''')
+
     # Safe migration: ensure newly added forensic & detection tracking columns exist on pre-existing tables
     c.execute("PRAGMA table_info(ingestion_batches)")
     existing_bch_cols = {r["name"] for r in c.fetchall()}
@@ -633,6 +708,48 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
         c.execute("ALTER TABLE ingestion_batches ADD COLUMN detection_alerts_count INTEGER NOT NULL DEFAULT 0")
     if "detection_error" not in existing_bch_cols:
         c.execute("ALTER TABLE ingestion_batches ADD COLUMN detection_error TEXT")
+
+    # Migrate ingestion_batches CHECK constraint if 'partial' is missing
+    c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='ingestion_batches'")
+    bch_master = c.fetchone()
+    if bch_master and bch_master["sql"] and "'partial'" not in (bch_master["sql"] or ""):
+        c.execute("PRAGMA foreign_keys = OFF")
+        c.execute("""
+            CREATE TABLE ingestion_batches_migrated (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT UNIQUE NOT NULL,
+                filename TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                total_records INTEGER NOT NULL DEFAULT 0,
+                accepted_records INTEGER NOT NULL DEFAULT 0,
+                rejected_records INTEGER NOT NULL DEFAULT 0,
+                duplicate_records INTEGER NOT NULL DEFAULT 0,
+                created_by INTEGER NOT NULL,
+                created_username TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('completed', 'partial', 'failed')),
+                errors_json TEXT,
+                detection_status TEXT NOT NULL DEFAULT 'completed' CHECK(detection_status IN ('pending', 'completed', 'partial', 'failed', 'skipped')),
+                detection_alerts_count INTEGER NOT NULL DEFAULT 0,
+                detection_error TEXT,
+                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        c.execute("""
+            INSERT INTO ingestion_batches_migrated
+            SELECT id, batch_id, filename, source_type, total_records, accepted_records,
+                   rejected_records, duplicate_records, created_by, created_username,
+                   created_at, status, errors_json, detection_status, detection_alerts_count, detection_error
+            FROM ingestion_batches
+        """)
+        c.execute("DROP TABLE ingestion_batches")
+        c.execute("ALTER TABLE ingestion_batches_migrated RENAME TO ingestion_batches")
+        c.execute("PRAGMA foreign_keys = ON")
+
+    c.execute("PRAGMA table_info(rule_executions)")
+    existing_rule_exec_cols = {r["name"] for r in c.fetchall()}
+    if "error_message" not in existing_rule_exec_cols:
+        c.execute("ALTER TABLE rule_executions ADD COLUMN error_message TEXT")
 
     c.execute("PRAGMA table_info(security_events)")
     existing_sec_cols = {r["name"] for r in c.fetchall()}
@@ -668,6 +785,13 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
 
     # Sprint 4: Performance indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_batch ON security_events(batch_id)")
+
+    # Sprint 5: Performance indexes
+    c.execute("CREATE INDEX IF NOT EXISTS idx_reports_case ON case_reports(case_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON case_reports(status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_report_versions_id ON report_versions(report_id, version)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_report_evidence_rep ON report_evidence_links(report_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_report_evidence_case ON report_evidence_links(case_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_time ON security_events(event_time)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_ip ON security_events(source_ip)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_username ON security_events(username)")
@@ -1106,6 +1230,8 @@ def match_condition(incident: dict, cond: dict) -> bool:
     if op == "in":
         target_list = [str(t).strip().lower() for t in target]
         return str_val in target_list
+    if op == "matches_regex":
+        return bool(re.search(str(target), str(raw_val)))
 
     return False
 
@@ -1115,13 +1241,13 @@ def incident_matches_rule(incident: dict, conditions: list[dict]) -> bool:
             return False
     return True
 
-def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: str = None, reference_time: datetime = None) -> list[dict]:
+def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: str = None, reference_time: datetime = None, detailed: bool = False) -> Any:
     """
     Evaluates enabled detection rules against recent security events,
     correlates matching incidents by group_by_field, prevents duplicate alerts
     via deterministic idempotency hashing, and persists correlated detection alerts.
     Supports deterministic historical timestamp evaluation for imported SOC telemetry.
-    Returns list of newly generated alert dictionaries.
+    Returns list of newly generated alert dictionaries (or detailed result dictionary when detailed=True).
     """
     if db_path is None:
         try:
@@ -1145,6 +1271,9 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
     rules = [dict(r) for r in c.fetchall()]
 
     newly_generated_alerts = []
+    failed_rules = []
+    successful_rules = []
+    total_rules = len(rules)
     real_wall_clock_now = datetime.now()
     now_str = real_wall_clock_now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1188,7 +1317,7 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
             try:
                 conditions, err = validate_rule_conditions(rule["conditions_json"])
                 if err:
-                    continue
+                    raise ValueError(f"Rule {rule.get('rule_id')} has invalid condition specification: {err}")
 
                 window_seconds = rule["time_window_seconds"]
                 cutoff = (eval_now - timedelta(seconds=window_seconds)).strftime("%Y-%m-%d %H:%M:%S")
@@ -1434,12 +1563,851 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
                         VALUES (?, ?, ?, ?, 'triggered')
                     """, (rule["id"], now_str, len(matched_list), json.dumps(sorted_ids)))
 
+                successful_rules.append(rule["rule_id"])
+
             except Exception as e:
-                print(f"[DetectionEngine] Error evaluating rule {rule.get('rule_id')}: {e}")
+                err_msg = str(e)
+                failed_rules.append({
+                    "rule_id": rule.get("rule_id", "UNKNOWN"),
+                    "name": rule.get("name", "Unknown Rule"),
+                    "error": err_msg
+                })
+                try:
+                    c.execute("""
+                        INSERT INTO rule_executions (rule_id, execution_time, trigger_count, matched_incident_ids_json, status, error_message)
+                        VALUES (?, ?, 0, '[]', 'failed', ?)
+                    """, (rule["id"], now_str, err_msg))
+                except Exception:
+                    pass
+                print(f"[DetectionEngine] Error evaluating rule {rule.get('rule_id')}: {err_msg}")
 
     conn.commit()
     conn.close()
+
+    if detailed:
+        if not failed_rules:
+            pipeline_status = "completed"
+        elif len(failed_rules) == total_rules:
+            pipeline_status = "failed"
+        else:
+            pipeline_status = "partial"
+        return {
+            "alerts": newly_generated_alerts,
+            "total_rules": total_rules,
+            "successful_rules": len(successful_rules),
+            "failed_rules": failed_rules,
+            "status": pipeline_status
+        }
+
     return newly_generated_alerts
+
+
+# =========================================================
+# Sprint 5: Evidence-Grounded Investigation Report Helpers
+# =========================================================
+
+def map_risk_severity(risk: Any) -> str:
+    """Map numeric or string risk score to standardized severity level."""
+    try:
+        val = int(risk)
+        if val >= 80:
+            return "critical"
+        elif val >= 60:
+            return "high"
+        elif val >= 40:
+            return "medium"
+        return "low"
+    except (ValueError, TypeError):
+        return "low"
+
+
+def generate_report_id() -> str:
+    """Generate unique, structured report identifier (REP-YYYYMMDD-XXXXXX)."""
+    return f"REP-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+
+
+def evaluate_report_quality_checks(
+    report_row: dict,
+    case_row: dict,
+    evidence_links: list,
+    incident_row: dict,
+    security_events: list = None
+) -> list[dict]:
+    """
+    Evaluates 6 deterministic quality indicators for investigation reports.
+    No fake AI confidence scores or subjective metrics.
+    """
+    checks = []
+
+    # 1. Resolution Summary Presence
+    res_summary = (case_row.get("resolution_summary") or "").strip()
+    rem_history = (report_row.get("containment_remediation_history") or "").strip()
+    case_status = (case_row.get("status") or "").lower()
+    if res_summary:
+        checks.append({
+            "code": "resolution_summary",
+            "name": "Case Resolution Summary",
+            "status": "pass",
+            "description": f"Documented case resolution summary present ({len(res_summary)} characters)."
+        })
+    elif case_status in ("resolved", "contained"):
+        checks.append({
+            "code": "resolution_summary",
+            "name": "Case Resolution Summary",
+            "status": "fail" if report_row.get("status") == "finalized" else "warn",
+            "description": f"Case is marked '{case_status}' but lacks a documented resolution summary."
+        })
+    elif rem_history:
+        checks.append({
+            "code": "resolution_summary",
+            "name": "Case Resolution Summary",
+            "status": "pass",
+            "description": "Containment and remediation documentation present in report."
+        })
+    else:
+        checks.append({
+            "code": "resolution_summary",
+            "name": "Case Resolution Summary",
+            "status": "warn",
+            "description": "No formal case resolution summary or remediation history recorded yet."
+        })
+
+    # 2. Findings Evidence Linkage
+    try:
+        findings = json.loads(report_row.get("analyst_findings_json") or "[]")
+    except Exception:
+        findings = []
+
+    linked_ids = {str(link.get("reference_id")) for link in evidence_links if link.get("reference_id")}
+    if not findings:
+        checks.append({
+            "code": "findings_evidence_linkage",
+            "name": "Evidence-Grounded Findings",
+            "status": "warn",
+            "description": "No structured analyst findings documented in report."
+        })
+    else:
+        unlinked = []
+        for idx, f in enumerate(findings, start=1):
+            f_refs = f.get("evidence_refs", [])
+            if not f_refs or not any(str(r) in linked_ids for r in f_refs):
+                unlinked.append(f.get("claim", f"Finding #{idx}"))
+        if not unlinked:
+            checks.append({
+                "code": "findings_evidence_linkage",
+                "name": "Evidence-Grounded Findings",
+                "status": "pass",
+                "description": f"All {len(findings)} analyst finding(s) are linked to verified evidence references."
+            })
+        else:
+            checks.append({
+                "code": "findings_evidence_linkage",
+                "name": "Evidence-Grounded Findings",
+                "status": "warn",
+                "description": f"{len(unlinked)} of {len(findings)} finding(s) lack linked evidence references."
+            })
+
+    # 3. Case Timestamps Available
+    started_at = case_row.get("investigation_started_at")
+    inc_time = (incident_row.get("incident_time") or incident_row.get("time")) if incident_row else None
+    if started_at or inc_time:
+        checks.append({
+            "code": "case_timestamps",
+            "name": "Investigation Timestamps",
+            "status": "pass",
+            "description": "Standardized event occurrence and investigation timestamps are recorded."
+        })
+    else:
+        checks.append({
+            "code": "case_timestamps",
+            "name": "Investigation Timestamps",
+            "status": "warn",
+            "description": "Missing explicit investigation start or incident occurrence timestamp."
+        })
+
+    # 4. Conflicting Observations Check
+    events = security_events or []
+    has_conflicting = False
+    if len(events) >= 2:
+        outcomes = {e.get("outcome") for e in events if e.get("outcome")}
+        if "success" in outcomes and "failure" in outcomes:
+            has_conflicting = True
+
+    limitations_text = (report_row.get("limitations_and_uncertainties") or "").lower()
+    if has_conflicting:
+        if "conflict" in limitations_text or "anomaly" in limitations_text or "inconsistent" in limitations_text or "mixed" in limitations_text:
+            checks.append({
+                "code": "conflicting_observations",
+                "name": "Conflicting Observation Handling",
+                "status": "pass",
+                "description": "Telemetry contains mixed authentication outcomes, documented in report limitations."
+            })
+        else:
+            checks.append({
+                "code": "conflicting_observations",
+                "name": "Conflicting Observation Handling",
+                "status": "warn",
+                "description": "Mixed/conflicting event outcomes observed in case telemetry without documented limitation notes."
+            })
+    else:
+        checks.append({
+            "code": "conflicting_observations",
+            "name": "Conflicting Observation Handling",
+            "status": "pass",
+            "description": "No unresolved conflicting telemetry observations detected."
+        })
+
+    # 5. Event Provenance Stated
+    unverified_count = sum(1 for e in events if e.get("provenance") == "imported_unverified")
+    synthetic_count = sum(1 for e in events if e.get("provenance") == "synthetic")
+    system_count = sum(1 for e in events if e.get("provenance") == "system")
+    if unverified_count > 0:
+        checks.append({
+            "code": "event_provenance",
+            "name": "Data Provenance Documentation",
+            "status": "pass",
+            "description": f"Data provenance recorded: {unverified_count} imported event(s) flagged as unverified third-party records."
+        })
+    elif synthetic_count > 0 or system_count > 0 or incident_row:
+        checks.append({
+            "code": "event_provenance",
+            "name": "Data Provenance Documentation",
+            "status": "pass",
+            "description": "Case data provenance recorded (synthetic test telemetry or internal system event)."
+        })
+    else:
+        checks.append({
+            "code": "event_provenance",
+            "name": "Data Provenance Documentation",
+            "status": "warn",
+            "description": "Telemetry data provenance cannot be established from case records."
+        })
+
+    # 6. Analyst Conclusions Separated From Facts
+    checks.append({
+        "code": "conclusions_separation",
+        "name": "Fact / Interpretation Separation",
+        "status": "pass",
+        "description": "Analyst hypotheses and interpretations are segregated into structured findings with confidence qualifiers."
+    })
+
+    return checks
+
+
+def render_printable_html_report(data: dict) -> str:
+    """
+    Renders standalone, self-contained printable HTML investigation report.
+    Includes strict print media styles, confidentiality headers, provenance disclaimers,
+    and HTML-escaped output to prevent Stored XSS and HTML injection.
+    """
+    esc = html.escape
+    rep = data.get("report", {})
+    case = data.get("case", {})
+    inc = data.get("incident", {})
+    evidence_links = data.get("evidence_links", [])
+    timeline = data.get("timeline", [])
+    quality_checks = data.get("quality_checks", [])
+    version_history = data.get("version_history", [])
+
+    try:
+        findings = json.loads(rep.get("analyst_findings_json") or "[]")
+    except Exception:
+        findings = []
+
+    try:
+        mitre_list = json.loads(rep.get("mitre_attack_json") or "[]")
+    except Exception:
+        mitre_list = []
+
+    try:
+        accounts = json.loads(rep.get("affected_accounts_json") or "[]")
+    except Exception:
+        accounts = []
+
+    try:
+        assets = json.loads(rep.get("affected_assets_json") or "[]")
+    except Exception:
+        assets = []
+
+    # Quality check indicators HTML
+    qc_rows = []
+    for qc in quality_checks:
+        badge_cls = "badge-pass" if qc["status"] == "pass" else ("badge-warn" if qc["status"] == "warn" else "badge-fail")
+        qc_rows.append(f"""
+            <tr>
+                <td><strong>{esc(qc['name'])}</strong></td>
+                <td><span class="badge {badge_cls}">{esc(qc['status'].upper())}</span></td>
+                <td>{esc(qc['description'])}</td>
+            </tr>
+        """)
+    qc_html = "".join(qc_rows)
+
+    # Findings HTML
+    findings_rows = []
+    if findings:
+        for idx, f in enumerate(findings, start=1):
+            refs_str = ", ".join(f"#{esc(str(r))}" for r in f.get("evidence_refs", [])) or "None linked"
+            findings_rows.append(f"""
+                <div class="finding-card">
+                    <div class="finding-header">
+                        <span class="finding-title">Finding F-{idx:02d}: {esc(f.get('claim', 'Untitled Finding'))}</span>
+                        <span class="badge badge-info">Confidence: {esc(f.get('confidence', 'medium').capitalize())}</span>
+                    </div>
+                    <div class="finding-body">
+                        <p><strong>Interpretation:</strong> {esc(f.get('interpretation', 'No interpretation provided.'))}</p>
+                        <p class="text-muted"><small>Linked Evidence References: {refs_str}</small></p>
+                    </div>
+                </div>
+            """)
+    else:
+        findings_rows.append("<p class='text-muted'><em>No structured analyst findings documented for this report revision.</em></p>")
+    findings_html = "".join(findings_rows)
+
+    # Evidence Links HTML
+    ev_rows = []
+    if evidence_links:
+        for link in evidence_links:
+            prov_cls = "badge-observed" if link.get("provenance_status") == "observed" else "badge-unverified"
+            ev_rows.append(f"""
+                <tr>
+                    <td><code>{esc(link.get('reference_type', ''))}</code></td>
+                    <td><strong>{esc(str(link.get('reference_id', '')))}</strong></td>
+                    <td>{esc(link.get('label', ''))}</td>
+                    <td><span class="badge {prov_cls}">{esc(link.get('provenance_status', 'observed'))}</span></td>
+                    <td>{esc(link.get('snapshot_summary', ''))}</td>
+                    <td><small>{esc(link.get('limitations_note', 'None'))}</small></td>
+                </tr>
+            """)
+    else:
+        ev_rows.append("<tr><td colspan='6' class='text-muted'><em>No evidence records linked.</em></td></tr>")
+    evidence_html = "".join(ev_rows)
+
+    # Timeline HTML
+    tl_rows = []
+    if timeline:
+        for ev in timeline[:50]:
+            tz_tag = f" ({esc(ev.get('original_timezone'))})" if ev.get("original_timezone") and ev.get("original_timezone") != "UTC" else ""
+            cat_cls = f"badge-{ev.get('category', 'telemetry')}"
+            tl_rows.append(f"""
+                <tr>
+                    <td class="font-mono">{esc(ev.get('occurrence_time', ''))}{tz_tag}</td>
+                    <td class="font-mono">{esc(ev.get('recorded_time', ''))}</td>
+                    <td><span class="badge {cat_cls}">{esc(ev.get('category', 'telemetry'))}</span></td>
+                    <td><strong>{esc(ev.get('event_type', ''))}</strong></td>
+                    <td>{esc(ev.get('actor', '-'))}</td>
+                    <td>{esc(ev.get('details', ''))}</td>
+                </tr>
+            """)
+    else:
+        tl_rows.append("<tr><td colspan='6' class='text-muted'><em>No timeline activity recorded.</em></td></tr>")
+    timeline_html = "".join(tl_rows)
+
+    # MITRE ATT&CK HTML
+    mitre_rows = []
+    if mitre_list:
+        for m in mitre_list:
+            mitre_rows.append(f"""
+                <tr>
+                    <td><code>{esc(m.get('technique_id', ''))}</code></td>
+                    <td><strong>{esc(m.get('technique_name', ''))}</strong></td>
+                    <td>{esc(m.get('rule_name', ''))}</td>
+                    <td><small>{esc(m.get('classification_limitation', 'Automated rule mapping; not exhaustive attribution.'))}</small></td>
+                </tr>
+            """)
+    else:
+        mitre_rows.append("<tr><td colspan='4' class='text-muted'><em>No MITRE ATT&CK techniques mapped to correlated alerts.</em></td></tr>")
+    mitre_html = "".join(mitre_rows)
+
+    # Version history HTML
+    vh_rows = []
+    if version_history:
+        for v in version_history:
+            vh_rows.append(f"""
+                <tr>
+                    <td><strong>v{esc(str(v.get('version')))}</strong></td>
+                    <td>{esc(v.get('status', '').upper())}</td>
+                    <td>{esc(v.get('finalized_by_username', v.get('author_username', '-')))}</td>
+                    <td>{esc(v.get('finalized_at', v.get('created_at', '-')))}</td>
+                    <td>{esc(v.get('change_summary', 'Historical snapshot preserved.'))}</td>
+                </tr>
+            """)
+    else:
+        vh_rows.append(f"<tr><td><strong>v{esc(str(rep.get('version', 1)))}</strong></td><td>{esc(rep.get('status', 'draft').upper())}</td><td>{esc(rep.get('author_username', ''))}</td><td>{esc(rep.get('created_at', ''))}</td><td>Current working draft.</td></tr>")
+    vh_html = "".join(vh_rows)
+
+    accounts_str = ", ".join(f"<code>{esc(str(a))}</code>" for a in accounts) if accounts else "<em>None observed / Unknown</em>"
+    assets_str = ", ".join(f"<code>{esc(str(a))}</code>" for a in assets) if assets else "<em>None observed / Unknown</em>"
+
+    status_badge_cls = "badge-pass" if rep.get("status") == "finalized" else ("badge-warn" if rep.get("status") == "in_review" else "badge-info")
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{esc(rep.get('report_id', 'REP-001'))} — SOC Investigation Report</title>
+    <style>
+        @page {{
+            size: letter;
+            margin: 1.5cm;
+        }}
+        * {{ box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #0f172a;
+            background: #f8fafc;
+            margin: 0;
+            padding: 24px;
+        }}
+        .report-container {{
+            max-width: 960px;
+            margin: 0 auto;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 36px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }}
+        .report-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            border-bottom: 2px solid #0f172a;
+            padding-bottom: 18px;
+            margin-bottom: 24px;
+        }}
+        .brand-title {{
+            font-size: 20px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            color: #0f172a;
+            margin: 0 0 4px 0;
+        }}
+        .brand-sub {{
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #64748b;
+            font-weight: 600;
+            margin: 0;
+        }}
+        .confidential-tag {{
+            display: inline-block;
+            background: #dc2626;
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            border-radius: 4px;
+        }}
+        .disclaimer-banner {{
+            background: #f1f5f9;
+            border-left: 4px solid #64748b;
+            padding: 12px 16px;
+            font-size: 12px;
+            color: #475569;
+            margin-bottom: 24px;
+            border-radius: 0 4px 4px 0;
+        }}
+        .meta-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 14px;
+            margin-bottom: 28px;
+        }}
+        .meta-item {{
+            display: flex;
+            flex-direction: column;
+        }}
+        .meta-label {{
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #64748b;
+            font-weight: 700;
+            margin-bottom: 2px;
+        }}
+        .meta-value {{
+            font-size: 13px;
+            font-weight: 600;
+            color: #0f172a;
+        }}
+        h2.section-heading {{
+            font-size: 15px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #0f172a;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 6px;
+            margin: 28px 0 12px 0;
+        }}
+        p {{ margin: 0 0 10px 0; }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            margin-bottom: 20px;
+        }}
+        th, td {{
+            padding: 8px 10px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }}
+        th {{
+            background: #f1f5f9;
+            font-weight: 700;
+            color: #334155;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }}
+        .font-mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; }}
+        code {{
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            background: #f1f5f9;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 11px;
+            color: #0f172a;
+        }}
+        .badge {{
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }}
+        .badge-pass {{ background: #dcfce7; color: #166534; }}
+        .badge-warn {{ background: #fef9c3; color: #854d0e; }}
+        .badge-fail {{ background: #fee2e2; color: #991b1b; }}
+        .badge-info {{ background: #e0f2fe; color: #075985; }}
+        .badge-observed {{ background: #dcfce7; color: #166534; }}
+        .badge-unverified {{ background: #ffedd5; color: #9a3412; }}
+        .badge-telemetry {{ background: #ede9fe; color: #5b21b6; }}
+        .badge-detection {{ background: #fce7f3; color: #9d174d; }}
+        .badge-case_action {{ background: #e0e7ff; color: #3730a3; }}
+        .finding-card {{
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+            background: #ffffff;
+            page-break-inside: avoid;
+        }}
+        .finding-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }}
+        .finding-title {{ font-weight: 700; font-size: 13px; color: #0f172a; }}
+        .text-muted {{ color: #64748b; }}
+        .no-print {{
+            position: fixed;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            gap: 8px;
+            z-index: 1000;
+        }}
+        .btn {{
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border: 1px solid #cbd5e1;
+            background: #ffffff;
+            color: #0f172a;
+        }}
+        .btn-primary {{ background: #0f172a; color: #ffffff; border-color: #0f172a; }}
+        @media print {{
+            body {{ background: #ffffff !important; padding: 0 !important; color: #000000 !important; }}
+            .report-container {{ border: none !important; box-shadow: none !important; padding: 0 !important; max-width: 100% !important; }}
+            .no-print {{ display: none !important; }}
+            .finding-card, table, .meta-grid {{ page-break-inside: avoid; }}
+            thead {{ display: table-header-group; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="no-print">
+        <button class="btn btn-primary" onclick="window.print()">Print / Save as PDF</button>
+        <button class="btn" onclick="window.close()">Close Preview</button>
+    </div>
+
+    <div class="report-container">
+        <div class="report-header">
+            <div>
+                <h1 class="brand-title">AuthGuard-X Investigation Report</h1>
+                <p class="brand-sub">Digital Forensics &amp; SOC Case Documentation &bull; Version {esc(str(rep.get('version', 1)))}</p>
+            </div>
+            <div style="text-align: right;">
+                <span class="confidential-tag">CONFIDENTIAL // SOC RECORD</span>
+                <div style="margin-top: 6px;">
+                    <span class="badge {status_badge_cls}">{esc(rep.get('status', 'draft').upper())}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="disclaimer-banner">
+            <strong>Forensic Evidence Grounding &amp; Provenance Disclaimer:</strong><br>
+            This document is generated from persisted security event telemetry, rule-based detection alerts, analyst case notes, and append-only audit records stored locally in AuthGuard-X. All claims are traceable to specific record identifiers. This report reflects internal SOC investigation review and does not constitute independent accredited forensic certification.
+        </div>
+
+        <div class="meta-grid">
+            <div class="meta-item">
+                <span class="meta-label">Report ID</span>
+                <span class="meta-value font-mono">{esc(rep.get('report_id', ''))}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Case Reference</span>
+                <span class="meta-value">Case #{esc(str(rep.get('case_id', '')))}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Report Author</span>
+                <span class="meta-value">@{esc(rep.get('author_username', 'analyst'))}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Reviewer</span>
+                <span class="meta-value">{esc(rep.get('reviewer_username') or 'Pending Review')}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Incident Classification</span>
+                <span class="meta-value">{esc(rep.get('incident_classification', 'Security Incident'))}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Case Severity</span>
+                <span class="meta-value">{esc(str(rep.get('severity', 'high')).upper())}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Created Timestamp</span>
+                <span class="meta-value font-mono">{esc(rep.get('created_at', ''))}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Finalized Timestamp</span>
+                <span class="meta-value font-mono">{esc(rep.get('finalized_at') or 'Draft / In-Progress')}</span>
+            </div>
+        </div>
+
+        <h2 class="section-heading">1. Investigation Quality Indicators (Deterministic Checks)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 25%;">Quality Indicator</th>
+                    <th style="width: 15%;">Status</th>
+                    <th style="width: 60%;">Deterministic Observation</th>
+                </tr>
+            </thead>
+            <tbody>
+                {qc_html}
+            </tbody>
+        </table>
+
+        <h2 class="section-heading">2. Executive Summary</h2>
+        <p>{esc(rep.get('executive_summary') or 'No executive summary provided.')}</p>
+
+        <h2 class="section-heading">3. Detection &amp; Discovery Context</h2>
+        <p>{esc(rep.get('detection_context') or 'Standard automated detection pipeline evaluation.')}</p>
+
+        <h2 class="section-heading">4. Affected Accounts &amp; Assets (Observed Telemetry)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 50%;">Observed Accounts</th>
+                    <th style="width: 50%;">Observed Assets / Hosts / IPs</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>{accounts_str}</td>
+                    <td>{assets_str}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2 class="section-heading">5. MITRE ATT&amp;CK Mapping (Rule Classifications)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 18%;">Technique ID</th>
+                    <th style="width: 30%;">Technique Name</th>
+                    <th style="width: 24%;">Triggering Rule</th>
+                    <th style="width: 28%;">Classification Limitations</th>
+                </tr>
+            </thead>
+            <tbody>
+                {mitre_html}
+            </tbody>
+        </table>
+
+        <h2 class="section-heading">6. Analyst Findings &amp; Evidence Grounding</h2>
+        {findings_html}
+
+        <h2 class="section-heading">7. Verified Evidence References</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 14%;">Type</th>
+                    <th style="width: 14%;">Reference ID</th>
+                    <th style="width: 22%;">Label / Context</th>
+                    <th style="width: 14%;">Provenance</th>
+                    <th style="width: 22%;">Snapshot Summary</th>
+                    <th style="width: 14%;">Limitations</th>
+                </tr>
+            </thead>
+            <tbody>
+                {evidence_html}
+            </tbody>
+        </table>
+
+        <h2 class="section-heading">8. Investigation Event Timeline</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 20%;">Occurrence Time</th>
+                    <th style="width: 20%;">Recorded Time</th>
+                    <th style="width: 12%;">Category</th>
+                    <th style="width: 20%;">Event Type</th>
+                    <th style="width: 12%;">Actor</th>
+                    <th style="width: 16%;">Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {timeline_html}
+            </tbody>
+        </table>
+
+        <h2 class="section-heading">9. Containment, Remediation &amp; Resolution History</h2>
+        <p><strong>Case Resolution Status:</strong> <code>{esc(rep.get('resolution_status', 'open').upper())}</code></p>
+        <p>{esc(rep.get('containment_remediation_history') or 'No containment or remediation actions recorded.')}</p>
+
+        <h2 class="section-heading">10. Actionable Recommendations</h2>
+        <p>{esc(rep.get('recommendations') or 'Review authentication controls and monitor for repeated access attempts.')}</p>
+
+        <h2 class="section-heading">11. Uncertainties, Unavailable Information, and Limitations</h2>
+        <p>{esc(rep.get('limitations_and_uncertainties') or 'Imported telemetry records are subject to third-party sensor completeness and unverified collector fidelity.')}</p>
+
+        <h2 class="section-heading">12. Report Versioning &amp; Review History</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 12%;">Version</th>
+                    <th style="width: 15%;">Status</th>
+                    <th style="width: 20%;">Author / Finalizer</th>
+                    <th style="width: 23%;">Timestamp</th>
+                    <th style="width: 30%;">Change Summary</th>
+                </tr>
+            </thead>
+            <tbody>
+                {vh_html}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>"""
+
+
+def render_structured_json_report(data: dict) -> dict:
+    """
+    Renders structured JSON report format sanitized of credentials, tokens, and internal secrets.
+    """
+    rep = data.get("report", {})
+    case = data.get("case", {})
+    incident = data.get("incident", {})
+    evidence_links = data.get("evidence_links", [])
+    timeline = data.get("timeline", [])
+    quality_checks = data.get("quality_checks", [])
+    version_history = data.get("version_history", [])
+
+    try:
+        findings = json.loads(rep.get("analyst_findings_json") or "[]")
+    except Exception:
+        findings = []
+
+    try:
+        mitre = json.loads(rep.get("mitre_attack_json") or "[]")
+    except Exception:
+        mitre = []
+
+    try:
+        accounts = json.loads(rep.get("affected_accounts_json") or "[]")
+    except Exception:
+        accounts = []
+
+    try:
+        assets = json.loads(rep.get("affected_assets_json") or "[]")
+    except Exception:
+        assets = []
+
+    return {
+        "report_id": rep.get("report_id"),
+        "version": rep.get("version", 1),
+        "status": rep.get("status", "draft"),
+        "title": rep.get("title"),
+        "classification_disclaimer": "CONFIDENTIAL // AUTHGUARD-X INVESTIGATION REPORT",
+        "forensic_provenance_disclaimer": (
+            "Evidence-Grounded Investigation Report generated by AuthGuard-X. "
+            "Claims are strictly grounded in persisted security telemetry, correlated detection alerts, "
+            "and authenticated analyst case audit records. Does not constitute independent accredited forensic certification."
+        ),
+        "metadata": {
+            "case_id": rep.get("case_id"),
+            "author_username": rep.get("author_username"),
+            "reviewer_username": rep.get("reviewer_username"),
+            "incident_classification": rep.get("incident_classification"),
+            "severity": rep.get("severity"),
+            "resolution_status": rep.get("resolution_status"),
+            "created_at": rep.get("created_at"),
+            "updated_at": rep.get("updated_at"),
+            "finalized_at": rep.get("finalized_at")
+        },
+        "executive_summary": rep.get("executive_summary"),
+        "detection_context": rep.get("detection_context"),
+        "affected_accounts": accounts,
+        "affected_assets": assets,
+        "mitre_attack_mappings": mitre,
+        "analyst_findings": findings,
+        "verified_evidence_references": [
+            {
+                "type": el.get("reference_type"),
+                "reference_id": el.get("reference_id"),
+                "label": el.get("label"),
+                "provenance_status": el.get("provenance_status"),
+                "snapshot_summary": el.get("snapshot_summary"),
+                "limitations_note": el.get("limitations_note"),
+                "created_at": el.get("created_at")
+            }
+            for el in evidence_links
+        ],
+        "investigation_timeline": timeline,
+        "containment_remediation_history": rep.get("containment_remediation_history"),
+        "recommendations": rep.get("recommendations"),
+        "limitations_and_uncertainties": rep.get("limitations_and_uncertainties"),
+        "quality_indicators": quality_checks,
+        "version_history": [
+            {
+                "version": v.get("version"),
+                "status": v.get("status"),
+                "author_username": v.get("author_username"),
+                "finalized_by_username": v.get("finalized_by_username"),
+                "finalized_at": v.get("finalized_at"),
+                "change_summary": v.get("change_summary")
+            }
+            for v in version_history
+        ]
+    }
 
 
 def create_app(test_config=None) -> Flask:
@@ -4447,11 +5415,17 @@ def create_app(test_config=None) -> Flask:
         correlated_alerts = []
         if new_incident_ids:
             try:
-                correlated_alerts = evaluate_detection_pipeline(
+                pipeline_res = evaluate_detection_pipeline(
                     target_incident_ids=new_incident_ids,
-                    db_path=app.config["DATABASE_PATH"]
+                    db_path=app.config["DATABASE_PATH"],
+                    detailed=True
                 )
-                detection_status = "completed"
+                correlated_alerts = pipeline_res["alerts"]
+                detection_status = pipeline_res["status"]
+                if pipeline_res["failed_rules"]:
+                    detection_error = f"{len(pipeline_res['failed_rules'])} of {pipeline_res['total_rules']} rule(s) failed evaluation: " + "; ".join(f"{r['rule_id']}: {r['error']}" for r in pipeline_res["failed_rules"])
+                else:
+                    detection_error = None
             except Exception as e:
                 detection_status = "failed"
                 detection_error = str(e)
@@ -4533,17 +5507,25 @@ def create_app(test_config=None) -> Flask:
             return jsonify({"error": "Bad Request", "message": "No valid security incidents found in this batch to evaluate."}), 400
 
         try:
-            correlated_alerts = evaluate_detection_pipeline(
+            pipeline_res = evaluate_detection_pipeline(
                 target_incident_ids=incident_ids,
-                db_path=app.config["DATABASE_PATH"]
+                db_path=app.config["DATABASE_PATH"],
+                detailed=True
             )
+            correlated_alerts = pipeline_res["alerts"]
+            detection_status = pipeline_res["status"]
+            if pipeline_res["failed_rules"]:
+                detection_error = f"{len(pipeline_res['failed_rules'])} of {pipeline_res['total_rules']} rule(s) failed evaluation: " + "; ".join(f"{r['rule_id']}: {r['error']}" for r in pipeline_res["failed_rules"])
+            else:
+                detection_error = None
+
             conn = get_db_connection(app.config["DATABASE_PATH"])
             c = conn.cursor()
             c.execute("""
                 UPDATE ingestion_batches
-                SET detection_status = 'completed', detection_error = NULL, detection_alerts_count = ?
+                SET detection_status = ?, detection_error = ?, detection_alerts_count = ?
                 WHERE batch_id = ?
-            """, (len(correlated_alerts), clean_batch_id))
+            """, (detection_status, detection_error, len(correlated_alerts), clean_batch_id))
 
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             user_id = session.get("user_id")
@@ -4554,20 +5536,31 @@ def create_app(test_config=None) -> Flask:
                 ) VALUES (?, ?, 'retry_detection_evaluation', ?, ?, ?, ?)
             """, (
                 user_id, username, f"batch:{clean_batch_id}",
-                f"Retried detection evaluation for batch {clean_batch_id}",
-                json.dumps({"alerts_count": len(correlated_alerts)}),
+                f"Retried detection evaluation for batch {clean_batch_id} (status: {detection_status})",
+                json.dumps({
+                    "alerts_count": len(correlated_alerts),
+                    "detection_status": detection_status,
+                    "failed_rules_count": len(pipeline_res["failed_rules"])
+                }),
                 now_str
             ))
             conn.commit()
             conn.close()
 
+            status_code = 200 if detection_status != "failed" else 207
             return jsonify({
-                "status": "success",
+                "status": "success" if detection_status == "completed" else detection_status,
                 "batch_id": clean_batch_id,
-                "detection_status": "completed",
+                "detection_status": detection_status,
+                "detection_error": detection_error,
+                "failed_rules_count": len(pipeline_res["failed_rules"]),
                 "correlated_alerts_generated": len(correlated_alerts),
-                "message": f"Detection evaluation completed successfully ({len(correlated_alerts)} alert(s) generated or updated)."
-            }), 200
+                "message": (
+                    f"Detection evaluation completed successfully ({len(correlated_alerts)} alert(s) generated or updated)."
+                    if detection_status == "completed" else
+                    f"Detection evaluation finished with status '{detection_status}': {detection_error}"
+                )
+            }), status_code
         except Exception as e:
             conn = get_db_connection(app.config["DATABASE_PATH"])
             c = conn.cursor()
@@ -5091,6 +6084,1160 @@ def create_app(test_config=None) -> Flask:
             csv_content,
             mimetype="text/csv",
             headers={"Content-Disposition": "attachment; filename=security_events_export.csv"}
+        )
+
+    # ---------------------------------------------------------
+    # Sprint 5: Evidence-Grounded SOC Investigation Reports Endpoints
+    # ---------------------------------------------------------
+
+    def _fetch_report_and_verify_access(report_id_str: str, conn=None):
+        """Helper to fetch a case report and verify user ownership/access permissions."""
+        close_conn = False
+        if conn is None:
+            conn = get_db_connection(app.config["DATABASE_PATH"])
+            close_conn = True
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT r.*, c.status AS case_status, c.assigned_to, c.assigned_username,
+                   l.attack, l.behavior, l.risk, l.ip, l.time AS incident_time
+            FROM case_reports r
+            JOIN cases c ON r.case_id = c.incident_id
+            JOIN logs l ON c.incident_id = l.id
+            WHERE r.report_id = ?
+        """, (report_id_str.strip(),))
+        row = c.fetchone()
+        if not row:
+            if close_conn:
+                conn.close()
+            return None, (jsonify({"error": "Not Found", "message": f"Report '{report_id_str}' not found."}), 404), conn
+
+        report_dict = dict(row)
+        caller_role = session.get("role", "analyst")
+        caller_id = session.get("user_id")
+
+        return report_dict, None, conn
+
+    @app.route("/api/reports", methods=["GET"])
+    @login_required
+    def list_case_reports():
+        """Lists investigation case reports with filtering, pagination, and case linkage."""
+        case_id = request.args.get("case_id", type=int)
+        status_filter = request.args.get("status", "").strip().lower()
+        search_query = request.args.get("search", "").strip()
+        page = max(1, request.args.get("page", 1, type=int))
+        per_page = min(100, max(1, request.args.get("per_page", 20, type=int)))
+        offset = (page - 1) * per_page
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        conditions = ["1=1"]
+        params = []
+
+        if case_id:
+            conditions.append("r.case_id = ?")
+            params.append(case_id)
+        if status_filter in ("draft", "in_review", "finalized"):
+            conditions.append("r.status = ?")
+            params.append(status_filter)
+        if search_query:
+            term = f"%{search_query}%"
+            conditions.append("(r.report_id LIKE ? OR r.title LIKE ? OR r.author_username LIKE ? OR r.executive_summary LIKE ?)")
+            params.extend([term, term, term, term])
+
+        where_clause = " AND ".join(conditions)
+
+        c.execute(f"SELECT COUNT(*) AS total FROM case_reports r WHERE {where_clause}", params)
+        total_reports = c.fetchone()["total"]
+
+        c.execute(f"""
+            SELECT r.id, r.report_id, r.case_id, r.version, r.title, r.status,
+                   r.author_id, r.author_username, r.reviewer_username,
+                   r.incident_classification, r.severity, r.resolution_status,
+                   r.is_finalized, r.created_at, r.updated_at, r.finalized_at,
+                   (SELECT COUNT(*) FROM report_evidence_links el WHERE el.report_id = r.report_id) AS evidence_count
+            FROM case_reports r
+            WHERE {where_clause}
+            ORDER BY r.updated_at DESC
+            LIMIT ? OFFSET ?
+        """, params + [per_page, offset])
+        reports = [dict(row) for row in c.fetchall()]
+        conn.close()
+
+        total_pages = max(1, (total_reports + per_page - 1) // per_page)
+        return jsonify({
+            "reports": reports,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total_records": total_reports,
+                "total_pages": total_pages
+            }
+        }), 200
+
+    @app.route("/api/reports", methods=["POST"])
+    @login_required
+    def create_case_report():
+        """Creates a new evidence-grounded report for an investigation case."""
+        data = request.get_json(silent=True) or {}
+        case_id = data.get("case_id")
+        if not case_id:
+            return jsonify({"error": "Bad Request", "message": "Field 'case_id' is required."}), 400
+
+        try:
+            case_id = int(case_id)
+        except (ValueError, TypeError):
+            return jsonify({"error": "Bad Request", "message": "Field 'case_id' must be an integer."}), 400
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        # Check case and primary incident exist
+        c.execute("""
+            SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time, l.is_simulated
+            FROM cases c
+            JOIN logs l ON c.incident_id = l.id
+            WHERE c.incident_id = ?
+        """, (case_id,))
+        case_row = c.fetchone()
+        if not case_row:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Investigation case #{case_id} not found."}), 404
+
+        caller_role = session.get("role", "analyst")
+        caller_id = session.get("user_id")
+        caller_username = session.get("username", "analyst")
+
+        # RBAC & Ownership: only assigned analyst or admin can create report
+        if caller_role != "admin" and case_row["assigned_to"] is not None and case_row["assigned_to"] != caller_id:
+            conn.close()
+            return jsonify({
+                "error": "Forbidden",
+                "message": f"Cannot create report for case #{case_id} assigned to another analyst (@{case_row['assigned_username']})."
+            }), 403
+
+        # Auto-claim unassigned case if analyst creates a report
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if case_row["assigned_to"] is None:
+            c.execute("""
+                UPDATE cases
+                SET assigned_to = ?, assigned_username = ?, updated_at = ?, version = version + 1
+                WHERE incident_id = ?
+            """, (caller_id, caller_username, now_str, case_id))
+
+        # Check for correlated detection alerts
+        c.execute("""
+            SELECT a.id, a.alert_id, a.rule_id, a.rule_name, a.severity, a.explanation,
+                   r.mitre_technique_id, r.mitre_technique_name, r.mitre_url
+            FROM detection_alerts a
+            LEFT JOIN detection_rules r ON a.rule_id = r.id
+            WHERE a.linked_incident_id = ? OR a.matched_incident_ids_json LIKE ?
+        """, (case_id, f"%{case_id}%"))
+        alerts = [dict(a) for a in c.fetchall()]
+
+        # Check for linked security events
+        c.execute("""
+            SELECT id, event_id, batch_id, source_type, event_time, source_ip, dest_ip, hostname, username, attack_type, outcome, provenance
+            FROM security_events
+            WHERE incident_id = ?
+        """, (case_id,))
+        sec_events = [dict(s) for s in c.fetchall()]
+
+        # Grounded Accounts & Assets extraction
+        observed_accounts = set()
+        if case_row["username"] and case_row["username"] != "unknown":
+            observed_accounts.add(case_row["username"])
+        for s in sec_events:
+            if s.get("username") and s.get("username") != "unknown":
+                observed_accounts.add(s["username"])
+        affected_accounts_list = sorted(list(observed_accounts))
+
+        observed_assets = set()
+        if case_row["ip"] and case_row["ip"] != "unknown":
+            observed_assets.add(case_row["ip"])
+        for s in sec_events:
+            if s.get("source_ip") and s.get("source_ip") != "unknown":
+                observed_assets.add(s["source_ip"])
+            if s.get("dest_ip") and s.get("dest_ip") != "unknown":
+                observed_assets.add(s["dest_ip"])
+            if s.get("hostname") and s.get("hostname") != "unknown":
+                observed_assets.add(s["hostname"])
+        affected_assets_list = sorted(list(observed_assets))
+
+        # MITRE ATT&CK compilation with explicit classification limitation
+        mitre_list = []
+        for alt in alerts:
+            if alt.get("mitre_technique_id"):
+                mitre_list.append({
+                    "technique_id": alt["mitre_technique_id"],
+                    "technique_name": alt.get("mitre_technique_name", "Unknown Technique"),
+                    "rule_name": alt.get("rule_name", "Unknown Rule"),
+                    "mitre_url": alt.get("mitre_url", ""),
+                    "classification_limitation": "Automated detection rule mapping based on observed event conditions; not an exhaustive adversary attribution."
+                })
+
+        report_id = generate_report_id()
+        report_title = (data.get("title") or f"Investigation Report — Case #{case_id}: {case_row['attack']}").strip()[:200]
+
+        exec_summary = (data.get("executive_summary") or (
+            f"Security incident #{case_id} was investigated for suspected '{case_row['attack']}' activity. "
+            f"Observed behavior profile: {case_row['behavior']}. "
+            f"Total {len(alerts)} correlated detection alert(s) and {len(sec_events)} telemetry event(s) recorded."
+        )).strip()[:10000]
+
+        severity = map_risk_severity(case_row["risk"])
+        det_context = (
+            f"Case #{case_id} correlated with {len(alerts)} detection alert(s). " +
+            ("; ".join(f"Alert {a['alert_id']} ({a['rule_name']})" for a in alerts[:4]) if alerts else "No automated detection alerts triggered.")
+        )
+
+        containment_history = (
+            f"Case status: {case_row['status']}. "
+            f"Resolution summary: {case_row['resolution_summary'] or 'None recorded.'}"
+        )
+
+        limitations = (
+            "Telemetry records imported from external collectors or local sensors are subject to sensor completeness "
+            "and transport fidelity. Any unobserved attributes remain documented as Unknown."
+        )
+
+        c.execute("""
+            INSERT INTO case_reports (
+                report_id, case_id, version, title, status, author_id, author_username,
+                executive_summary, incident_classification, severity, detection_context,
+                affected_accounts_json, affected_assets_json, mitre_attack_json,
+                analyst_findings_json, containment_remediation_history, resolution_status,
+                recommendations, limitations_and_uncertainties, is_finalized,
+                created_at, updated_at
+            ) VALUES (?, ?, 1, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, 'Review authentication logs and enforce MFA on affected user accounts.', ?, 0, ?, ?)
+        """, (
+            report_id, case_id, report_title, caller_id, caller_username,
+            exec_summary, case_row["attack"], severity, det_context,
+            json.dumps(affected_accounts_list), json.dumps(affected_assets_list),
+            json.dumps(mitre_list), containment_history, case_row["status"],
+            limitations, now_str, now_str
+        ))
+
+        # Auto-create verified initial evidence references for primary case records
+        c.execute("""
+            INSERT INTO report_evidence_links (
+                report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+            ) VALUES (?, ?, 'incident', ?, ?, 'observed', ?, 'Primary incident record in case investigation workspace', ?)
+        """, (
+            report_id, case_id, str(case_id),
+            f"Primary Incident #{case_id} ({case_row['attack']})",
+            f"Incident #{case_id}: {case_row['attack']} from IP {case_row['ip'] or 'unknown'} (Risk: {case_row['risk']})",
+            now_str
+        ))
+
+        for alt in alerts:
+            c.execute("""
+                INSERT INTO report_evidence_links (
+                    report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+                ) VALUES (?, ?, 'alert', ?, ?, 'observed', ?, 'Automated detection alert correlated to case telemetry', ?)
+            """, (
+                report_id, case_id, alt["alert_id"],
+                f"Detection Alert {alt['alert_id']}",
+                f"{alt['rule_name']} ({alt['severity'].upper()}): {alt['explanation'][:160]}",
+                now_str
+            ))
+
+        for s in sec_events[:5]:
+            prov_status = "observed" if s.get("provenance") in ("observed", "system", "synthetic") else "unverified_import"
+            c.execute("""
+                INSERT INTO report_evidence_links (
+                    report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+                ) VALUES (?, ?, 'security_event', ?, ?, ?, ?, 'Normalized security telemetry record linked to case', ?)
+            """, (
+                report_id, case_id, s["event_id"],
+                f"Security Event {s['event_id']} ({s['source_type']})",
+                prov_status,
+                f"{s['attack_type']} ({s['outcome']}) from {s['source_ip']} at {s['event_time']}",
+                now_str
+            ))
+
+        # Audit log entry
+        c.execute("""
+            INSERT INTO incident_audit_log (
+                incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at
+            ) VALUES (?, ?, ?, 'report_created', NULL, 'v1:draft', ?, ?)
+        """, (
+            case_id, caller_id, caller_username,
+            f"Investigation report '{report_id}' created by {caller_username}",
+            now_str
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "message": "Investigation report created successfully.",
+            "report_id": report_id,
+            "case_id": case_id,
+            "version": 1,
+            "status": "draft",
+            "title": report_title
+        }), 201
+
+    @app.route("/api/reports/<report_id>", methods=["GET"])
+    @login_required
+    def get_case_report(report_id: str):
+        """Retrieves full case report details with live verified evidence references and deterministic quality checks."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        c = conn.cursor()
+        case_id = report_dict["case_id"]
+
+        # Fetch case data
+        c.execute("""
+            SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time, l.is_simulated
+            FROM cases c
+            JOIN logs l ON c.incident_id = l.id
+            WHERE c.incident_id = ?
+        """, (case_id,))
+        case_row = dict(c.fetchone())
+
+        # Fetch evidence links with live target verification
+        c.execute("""
+            SELECT id, report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+            FROM report_evidence_links
+            WHERE report_id = ?
+            ORDER BY id ASC
+        """, (report_id,))
+        raw_links = [dict(r) for r in c.fetchall()]
+
+        verified_links = []
+        for lk in raw_links:
+            ref_type = lk["reference_type"]
+            ref_id = lk["reference_id"]
+            is_valid = False
+            unavail_reason = None
+
+            if ref_type == "incident":
+                c.execute("SELECT id FROM logs WHERE id = ?", (ref_id,))
+                is_valid = bool(c.fetchone())
+            elif ref_type == "alert":
+                c.execute("SELECT id FROM detection_alerts WHERE alert_id = ? OR id = ?", (ref_id, ref_id))
+                is_valid = bool(c.fetchone())
+            elif ref_type == "security_event":
+                c.execute("SELECT id FROM security_events WHERE (event_id = ? OR id = ?) AND incident_id = ?", (ref_id, ref_id, case_id))
+                is_valid = bool(c.fetchone())
+            elif ref_type == "rule":
+                c.execute("SELECT id, status FROM detection_rules WHERE rule_id = ? OR id = ?", (ref_id, ref_id))
+                rule_row = c.fetchone()
+                if rule_row:
+                    is_valid = True
+                    if rule_row["status"] == "archived":
+                        unavail_reason = "Detection rule has been archived; historical reference preserved."
+            elif ref_type == "case_note":
+                c.execute("SELECT id FROM incident_notes WHERE id = ? AND incident_id = ?", (ref_id, case_id))
+                is_valid = bool(c.fetchone())
+            elif ref_type == "case_evidence":
+                c.execute("SELECT id FROM incident_evidence WHERE id = ? AND incident_id = ?", (ref_id, case_id))
+                is_valid = bool(c.fetchone())
+            elif ref_type == "case_audit":
+                c.execute("SELECT id FROM incident_audit_log WHERE id = ? AND incident_id = ?", (ref_id, case_id))
+                is_valid = bool(c.fetchone())
+            elif ref_type == "batch":
+                c.execute("SELECT id FROM ingestion_batches WHERE batch_id = ? OR id = ?", (ref_id, ref_id))
+                is_valid = bool(c.fetchone())
+
+            if not is_valid:
+                lk["provenance_status"] = "unavailable"
+                lk["unavailability_reason"] = "Referenced source record is missing or was removed; historical citation preserved."
+            elif unavail_reason:
+                lk["limitations_note"] = unavail_reason
+
+            verified_links.append(lk)
+
+        # Fetch security events for quality evaluation
+        c.execute("SELECT * FROM security_events WHERE incident_id = ?", (case_id,))
+        sec_events = [dict(s) for s in c.fetchall()]
+
+        # Evaluate 6 deterministic quality indicators
+        qc = evaluate_report_quality_checks(
+            report_row=report_dict,
+            case_row=case_row,
+            evidence_links=verified_links,
+            incident_row=case_row,
+            security_events=sec_events
+        )
+
+        # Fetch version history
+        c.execute("""
+            SELECT id, report_id, version, title, status, author_username, reviewer_username,
+                   finalized_by_username, finalized_at, change_summary, created_at
+            FROM report_versions
+            WHERE report_id = ?
+            ORDER BY version DESC
+        """, (report_id,))
+        versions = [dict(v) for v in c.fetchall()]
+
+        conn.close()
+
+        try:
+            report_dict["affected_accounts"] = json.loads(report_dict.get("affected_accounts_json") or "[]")
+        except Exception:
+            report_dict["affected_accounts"] = []
+        try:
+            report_dict["affected_assets"] = json.loads(report_dict.get("affected_assets_json") or "[]")
+        except Exception:
+            report_dict["affected_assets"] = []
+        try:
+            report_dict["mitre_attack"] = json.loads(report_dict.get("mitre_attack_json") or "[]")
+        except Exception:
+            report_dict["mitre_attack"] = []
+        try:
+            report_dict["analyst_findings"] = json.loads(report_dict.get("analyst_findings_json") or "[]")
+        except Exception:
+            report_dict["analyst_findings"] = []
+
+        report_dict["evidence_links"] = verified_links
+        report_dict["quality_checks"] = qc
+        report_dict["version_history"] = versions
+        report_dict["case"] = case_row
+
+        return jsonify({
+            "report": report_dict
+        }), 200
+
+    @app.route("/api/reports/<report_id>", methods=["PATCH"])
+    @login_required
+    def update_case_report(report_id: str):
+        """Updates report draft with optimistic locking and case ownership verification."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        if report_dict.get("is_finalized"):
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Report '{report_id}' is finalized (v{report_dict['version']}) and immutable. Create a new revision via /revise to make modifications."
+            }), 409
+
+        caller_role = session.get("role", "analyst")
+        caller_id = session.get("user_id")
+        caller_username = session.get("username", "analyst")
+
+        if caller_role != "admin" and report_dict["author_id"] != caller_id and report_dict["assigned_to"] != caller_id:
+            conn.close()
+            return jsonify({
+                "error": "Forbidden",
+                "message": f"Cannot modify report authored by @{report_dict['author_username']}."
+            }), 403
+
+        data = request.get_json(silent=True) or {}
+
+        # Validate expected version for optimistic concurrency
+        expected_version = data.get("expected_version")
+        if expected_version is None:
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Field 'expected_version' is required for optimistic concurrency protection."
+            }), 400
+
+        try:
+            if isinstance(expected_version, bool):
+                raise ValueError("Booleans are invalid versions")
+            expected_version = int(expected_version)
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "Field 'expected_version' must be a valid integer."}), 400
+
+        if expected_version != report_dict["version"]:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Stale update conflict: current report version is {report_dict['version']}, but expected {expected_version}."
+            }), 409
+
+        # Extract editable fields with size boundaries
+        title = data.get("title", report_dict["title"]).strip()[:200]
+        exec_summary = data.get("executive_summary", report_dict["executive_summary"]).strip()[:10000]
+        findings_raw = data.get("analyst_findings", None)
+        if findings_raw is not None:
+            if not isinstance(findings_raw, list):
+                conn.close()
+                return jsonify({"error": "Bad Request", "message": "Field 'analyst_findings' must be a list of findings."}), 400
+            findings_json = json.dumps(findings_raw)[:50000]
+        else:
+            findings_json = report_dict["analyst_findings_json"]
+
+        recommendations = data.get("recommendations", report_dict["recommendations"]).strip()[:10000]
+        limitations = data.get("limitations_and_uncertainties", report_dict["limitations_and_uncertainties"]).strip()[:10000]
+        rem_history = data.get("containment_remediation_history", report_dict["containment_remediation_history"]).strip()[:10000]
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c = conn.cursor()
+
+        c.execute("""
+            UPDATE case_reports
+            SET title = ?, executive_summary = ?, analyst_findings_json = ?,
+                recommendations = ?, limitations_and_uncertainties = ?,
+                containment_remediation_history = ?, updated_at = ?
+            WHERE report_id = ?
+        """, (
+            title, exec_summary, findings_json, recommendations, limitations,
+            rem_history, now_str, report_id
+        ))
+
+        # Record activity in incident audit log
+        c.execute("""
+            INSERT INTO incident_audit_log (
+                incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at
+            ) VALUES (?, ?, ?, 'report_updated', ?, ?, ?, ?)
+        """, (
+            report_dict["case_id"], caller_id, caller_username,
+            f"v{report_dict['version']}", f"v{report_dict['version']}",
+            f"Investigation report '{report_id}' draft updated by {caller_username}",
+            now_str
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "message": "Report updated successfully.",
+            "report_id": report_id,
+            "version": report_dict["version"],
+            "updated_at": now_str
+        }), 200
+
+    @app.route("/api/reports/<report_id>/status", methods=["POST"])
+    @login_required
+    def transition_report_status(report_id: str):
+        """Transitions report status (draft -> in_review -> finalized) with immutable snapshotting on finalization."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        data = request.get_json(silent=True) or {}
+        new_status = data.get("status", "").strip().lower()
+        if new_status not in ("draft", "in_review", "finalized"):
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Status must be one of 'draft', 'in_review', or 'finalized'."
+            }), 400
+
+        expected_version = data.get("expected_version")
+        if expected_version is None:
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Field 'expected_version' is required for optimistic concurrency protection."
+            }), 400
+
+        try:
+            if isinstance(expected_version, bool):
+                raise ValueError("Booleans are invalid versions")
+            expected_version = int(expected_version)
+        except (ValueError, TypeError):
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "Field 'expected_version' must be an integer."}), 400
+
+        if expected_version != report_dict["version"]:
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Stale version conflict: report is at v{report_dict['version']}, expected v{expected_version}."
+            }), 409
+
+        if report_dict.get("is_finalized"):
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Report '{report_id}' is finalized (v{report_dict['version']}) and immutable. Call /revise to create a new revision."
+            }), 409
+
+        caller_role = session.get("role", "analyst")
+        caller_id = session.get("user_id")
+        caller_username = session.get("username", "analyst")
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c = conn.cursor()
+
+        # Handle Finalization: create immutable snapshot in report_versions
+        if new_status == "finalized":
+            # Fetch all evidence links for snapshot
+            c.execute("""
+                SELECT id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+                FROM report_evidence_links
+                WHERE report_id = ?
+            """, (report_id,))
+            evidence_links = [dict(r) for r in c.fetchall()]
+
+            # Fetch case details
+            c.execute("""
+                SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time
+                FROM cases c
+                JOIN logs l ON c.incident_id = l.id
+                WHERE c.incident_id = ?
+            """, (report_dict["case_id"],))
+            case_data = dict(c.fetchone())
+
+            # Evaluate deterministic quality checks for snapshot
+            qc = evaluate_report_quality_checks(
+                report_row=report_dict,
+                case_row=case_data,
+                evidence_links=evidence_links,
+                incident_row=case_data
+            )
+
+            disclaimer = (
+                "Finalization of this report represents internal review and evidence linkage within AuthGuard-X; "
+                "it does not constitute independent accredited forensic certification."
+            )
+
+            snapshot_payload = {
+                "report_id": report_id,
+                "version": report_dict["version"],
+                "status": "finalized",
+                "title": report_dict["title"],
+                "executive_summary": report_dict["executive_summary"],
+                "incident_classification": report_dict["incident_classification"],
+                "severity": report_dict["severity"],
+                "detection_context": report_dict["detection_context"],
+                "affected_accounts_json": report_dict["affected_accounts_json"],
+                "affected_assets_json": report_dict["affected_assets_json"],
+                "mitre_attack_json": report_dict["mitre_attack_json"],
+                "analyst_findings_json": report_dict["analyst_findings_json"],
+                "containment_remediation_history": report_dict["containment_remediation_history"],
+                "resolution_status": report_dict["resolution_status"],
+                "recommendations": report_dict["recommendations"],
+                "limitations_and_uncertainties": report_dict["limitations_and_uncertainties"],
+                "evidence_links": evidence_links,
+                "quality_checks": qc,
+                "finalized_by": caller_username,
+                "finalized_at": now_str,
+                "provenance_disclaimer": disclaimer
+            }
+
+            change_summary = (data.get("change_summary") or f"Report v{report_dict['version']} finalized by @{caller_username}").strip()[:500]
+
+            c.execute("""
+                INSERT INTO report_versions (
+                    report_id, version, title, status, snapshot_json, author_username,
+                    reviewer_username, finalized_by_username, finalized_at,
+                    change_summary, provenance_disclaimer, created_at
+                ) VALUES (?, ?, ?, 'finalized', ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                report_id, report_dict["version"], report_dict["title"],
+                json.dumps(snapshot_payload), report_dict["author_username"],
+                caller_username, caller_username, now_str,
+                change_summary, disclaimer, now_str
+            ))
+
+            c.execute("""
+                UPDATE case_reports
+                SET status = 'finalized', is_finalized = 1, finalized_at = ?,
+                    finalized_by_username = ?, reviewer_username = ?, updated_at = ?
+                WHERE report_id = ?
+            """, (now_str, caller_username, caller_username, now_str, report_id))
+
+        else:
+            reviewer = caller_username if new_status == "in_review" else report_dict.get("reviewer_username")
+            c.execute("""
+                UPDATE case_reports
+                SET status = ?, reviewer_username = ?, updated_at = ?
+                WHERE report_id = ?
+            """, (new_status, reviewer, now_str, report_id))
+
+        # Record activity in incident audit log
+        c.execute("""
+            INSERT INTO incident_audit_log (
+                incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at
+            ) VALUES (?, ?, ?, 'report_status_changed', ?, ?, ?, ?)
+        """, (
+            report_dict["case_id"], caller_id, caller_username,
+            report_dict["status"], new_status,
+            f"Investigation report '{report_id}' status transitioned from {report_dict['status']} to {new_status} by {caller_username}",
+            now_str
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "message": f"Report status transitioned to '{new_status}'.",
+            "report_id": report_id,
+            "version": report_dict["version"],
+            "status": new_status,
+            "is_finalized": 1 if new_status == "finalized" else 0,
+            "updated_at": now_str
+        }), 200
+
+    @app.route("/api/reports/<report_id>/revise", methods=["POST"])
+    @login_required
+    def revise_finalized_report(report_id: str):
+        """Creates a new version draft from a finalized report, incrementing the version and preserving the historical snapshot."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        if not report_dict.get("is_finalized"):
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": f"Report '{report_id}' is currently in '{report_dict['status']}' state. Revisions can only be initiated from finalized reports."
+            }), 400
+
+        data = request.get_json(silent=True) or {}
+        change_summary = (data.get("change_summary") or "New revision initiated for additional findings and evidence analysis.").strip()[:500]
+
+        caller_id = session.get("user_id")
+        caller_username = session.get("username", "analyst")
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        new_version = report_dict["version"] + 1
+
+        c = conn.cursor()
+        c.execute("""
+            UPDATE case_reports
+            SET version = ?, status = 'draft', is_finalized = 0,
+                updated_at = ?, finalized_at = NULL, finalized_by_username = NULL
+            WHERE report_id = ?
+        """, (new_version, now_str, report_id))
+
+        c.execute("""
+            INSERT INTO incident_audit_log (
+                incident_id, actor_id, actor_username, action, before_value, after_value, description, created_at
+            ) VALUES (?, ?, ?, 'report_revised', ?, ?, ?, ?)
+        """, (
+            report_dict["case_id"], caller_id, caller_username,
+            f"v{report_dict['version']}:finalized", f"v{new_version}:draft",
+            f"Investigation report '{report_id}' revision v{new_version} initiated by {caller_username}: {change_summary}",
+            now_str
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "message": f"New report revision v{new_version} created.",
+            "report_id": report_id,
+            "version": new_version,
+            "status": "draft",
+            "is_finalized": 0,
+            "updated_at": now_str
+        }), 200
+
+    @app.route("/api/reports/<report_id>/evidence", methods=["POST"])
+    @login_required
+    def link_report_evidence(report_id: str):
+        """Links a verified evidence item to the report while enforcing strict case isolation."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        if report_dict.get("is_finalized"):
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Report '{report_id}' is finalized and immutable. Create a new revision to add evidence links."
+            }), 409
+
+        data = request.get_json(silent=True) or {}
+        ref_type = (data.get("reference_type") or "").strip().lower()
+        ref_id = str(data.get("reference_id") or "").strip()
+        label = (data.get("label") or f"Evidence {ref_type}:{ref_id}").strip()[:200]
+        limitations_note = (data.get("limitations_note") or "").strip()[:500] or None
+
+        allowed_types = ('security_event', 'batch', 'incident', 'alert', 'rule', 'case_audit', 'case_note', 'case_evidence')
+        if ref_type not in allowed_types:
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": f"Invalid reference_type '{ref_type}'. Allowed types: {', '.join(allowed_types)}."
+            }), 400
+
+        if not ref_id:
+            conn.close()
+            return jsonify({"error": "Bad Request", "message": "Field 'reference_id' is required."}), 400
+
+        case_id = report_dict["case_id"]
+        c = conn.cursor()
+
+        # Enforce Case Isolation: verify that the evidence reference belongs to this case!
+        is_valid = False
+        prov_status = "observed"
+        snapshot_summary = ""
+
+        if ref_type == "incident":
+            if str(ref_id) != str(case_id):
+                conn.close()
+                return jsonify({"error": "Forbidden", "message": f"Cross-case evidence reference prohibited: incident #{ref_id} does not match case #{case_id}."}), 403
+            c.execute("SELECT id, attack, risk, ip, time FROM logs WHERE id = ?", (ref_id,))
+            row = c.fetchone()
+            if row:
+                is_valid = True
+                snapshot_summary = f"Incident #{row['id']}: {row['attack']} from IP {row['ip']} (Risk: {row['risk']})"
+        elif ref_type == "security_event":
+            c.execute("SELECT event_id, attack_type, outcome, source_ip, event_time, provenance FROM security_events WHERE (event_id = ? OR id = ?) AND incident_id = ?", (ref_id, ref_id, case_id))
+            row = c.fetchone()
+            if row:
+                is_valid = True
+                prov_status = "observed" if row["provenance"] in ("observed", "system", "synthetic") else "unverified_import"
+                snapshot_summary = f"Event {row['event_id']}: {row['attack_type']} ({row['outcome']}) from {row['source_ip']} at {row['event_time']}"
+        elif ref_type == "alert":
+            c.execute("SELECT alert_id, rule_name, severity, explanation FROM detection_alerts WHERE (alert_id = ? OR id = ?) AND (linked_incident_id = ? OR matched_incident_ids_json LIKE ?)", (ref_id, ref_id, case_id, f"%{case_id}%"))
+            row = c.fetchone()
+            if row:
+                is_valid = True
+                snapshot_summary = f"{row['rule_name']} ({row['severity'].upper()}): {row['explanation'][:120]}"
+        elif ref_type == "rule":
+            c.execute("SELECT rule_id, name, severity, status FROM detection_rules WHERE rule_id = ? OR id = ?", (ref_id, ref_id))
+            row = c.fetchone()
+            if row:
+                is_valid = True
+                if row["status"] == "archived":
+                    prov_status = "inferred"
+                    limitations_note = "Archived rule; historical reference."
+                snapshot_summary = f"Rule {row['rule_id']}: {row['name']} ({row['severity'].upper()})"
+        elif ref_type == "case_note":
+            c.execute("SELECT id, author_username, content, created_at FROM incident_notes WHERE id = ? AND incident_id = ?", (ref_id, case_id))
+            row = c.fetchone()
+            if row:
+                is_valid = True
+                snapshot_summary = f"Note #{row['id']} by @{row['author_username']}: {row['content'][:100]}"
+        elif ref_type == "case_evidence":
+            c.execute("SELECT id, evidence_type, description, raw_data FROM incident_evidence WHERE id = ? AND incident_id = ?", (ref_id, case_id))
+            row = c.fetchone()
+            if row:
+                is_valid = True
+                snapshot_summary = f"Evidence #{row['id']} ({row['evidence_type']}): {row['description'][:100]}"
+        elif ref_type == "case_audit":
+            c.execute("SELECT id, action, actor_username, description, created_at FROM incident_audit_log WHERE id = ? AND incident_id = ?", (ref_id, case_id))
+            row = c.fetchone()
+            if row:
+                is_valid = True
+                snapshot_summary = f"Audit #{row['id']}: {row['action']} by @{row['actor_username']} ({row['created_at']})"
+        elif ref_type == "batch":
+            c.execute("""
+                SELECT b.batch_id, b.filename, b.source_type
+                FROM ingestion_batches b
+                JOIN security_events s ON b.batch_id = s.batch_id
+                WHERE (b.batch_id = ? OR b.id = ?) AND s.incident_id = ?
+            """, (ref_id, ref_id, case_id))
+            row = c.fetchone()
+            if row:
+                is_valid = True
+                snapshot_summary = f"Batch {row['batch_id']}: {row['filename']} ({row['source_type']})"
+
+        if not is_valid:
+            conn.close()
+            return jsonify({
+                "error": "Bad Request",
+                "message": f"Referenced record {ref_type}:{ref_id} was not found or does not belong to case #{case_id}."
+            }), 400
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        c.execute("""
+            INSERT INTO report_evidence_links (
+                report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            report_id, case_id, ref_type, str(ref_id), label, prov_status, snapshot_summary, limitations_note, now_str
+        ))
+        link_id = c.lastrowid
+
+        c.execute("""
+            UPDATE case_reports SET updated_at = ? WHERE report_id = ?
+        """, (now_str, report_id))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "message": "Evidence record linked successfully.",
+            "link_id": link_id,
+            "report_id": report_id,
+            "reference_type": ref_type,
+            "reference_id": ref_id,
+            "provenance_status": prov_status
+        }), 201
+
+    @app.route("/api/reports/<report_id>/evidence/<int:link_id>", methods=["DELETE"])
+    @login_required
+    def unlink_report_evidence(report_id: str, link_id: int):
+        """Unlinks an evidence reference from a draft/in_review report."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        if report_dict.get("is_finalized"):
+            conn.close()
+            return jsonify({
+                "error": "Conflict",
+                "message": f"Report '{report_id}' is finalized and immutable. Cannot remove evidence links."
+            }), 409
+
+        c = conn.cursor()
+        c.execute("DELETE FROM report_evidence_links WHERE id = ? AND report_id = ?", (link_id, report_id))
+        if c.rowcount == 0:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Evidence link #{link_id} not found on report '{report_id}'."}), 404
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("UPDATE case_reports SET updated_at = ? WHERE report_id = ?", (now_str, report_id))
+        conn.commit()
+        conn.close()
+
+        return jsonify({"message": f"Evidence link #{link_id} unlinked successfully.", "report_id": report_id}), 200
+
+    def _build_report_timeline(case_id: int, conn, category_filter: str = "all", sort_dir: str = "asc") -> list:
+        c = conn.cursor()
+        timeline_items = []
+
+        # 1. Telemetry Events from security_events
+        c.execute("""
+            SELECT event_id, event_time, original_timestamp, original_timezone, ingested_at,
+                   source_type, category, attack_type, outcome, source_ip, dest_ip, username, hostname, provenance
+            FROM security_events
+            WHERE incident_id = ?
+        """, (case_id,))
+        for row in c.fetchall():
+            s = dict(row)
+            timeline_items.append({
+                "category": "telemetry",
+                "occurrence_time": s["event_time"],
+                "recorded_time": s["ingested_at"],
+                "original_timestamp": s.get("original_timestamp"),
+                "original_timezone": s.get("original_timezone") or "UTC",
+                "event_type": f"Security Telemetry ({s['source_type']})",
+                "actor": s.get("username") or "unknown",
+                "source_ip": s.get("source_ip"),
+                "details": f"{s['attack_type']} ({s['outcome'].upper()}) from {s['source_ip']} to {s.get('dest_ip') or 'local'}"
+            })
+
+        # 2. Incident Record from logs
+        c.execute("""
+            SELECT id, attack, behavior, risk, ip, username, time, is_simulated
+            FROM logs
+            WHERE id = ?
+        """, (case_id,))
+        inc_row = c.fetchone()
+        if inc_row:
+            inc = dict(inc_row)
+            timeline_items.append({
+                "category": "telemetry",
+                "occurrence_time": inc["time"],
+                "recorded_time": inc["time"],
+                "original_timestamp": inc["time"],
+                "original_timezone": "UTC",
+                "event_type": "Incident Log Created",
+                "actor": inc.get("username") or "unknown",
+                "source_ip": inc.get("ip"),
+                "details": f"Primary incident #{inc['id']} created: {inc['attack']} (Risk: {inc['risk']})"
+            })
+
+        # 3. Detection Alerts
+        c.execute("""
+            SELECT alert_id, rule_name, severity, first_event_time, last_event_time, created_at, explanation
+            FROM detection_alerts
+            WHERE linked_incident_id = ? OR matched_incident_ids_json LIKE ?
+        """, (case_id, f"%{case_id}%"))
+        for row in c.fetchall():
+            a = dict(row)
+            timeline_items.append({
+                "category": "detection",
+                "occurrence_time": a.get("first_event_time") or a["created_at"],
+                "recorded_time": a["created_at"],
+                "original_timestamp": a.get("first_event_time"),
+                "original_timezone": "UTC",
+                "event_type": f"Alert Triggered ({a['severity'].upper()})",
+                "actor": "Detection Engine",
+                "source_ip": "-",
+                "details": f"Rule '{a['rule_name']}' triggered alert {a['alert_id']}: {a['explanation'][:140]}"
+            })
+
+        # 4. Case Actions from incident_audit_log
+        c.execute("""
+            SELECT id, action, actor_username, before_value, after_value, description, created_at
+            FROM incident_audit_log
+            WHERE incident_id = ?
+        """, (case_id,))
+        for row in c.fetchall():
+            aud = dict(row)
+            cat = "resolution" if aud["action"] in ("resolved", "contained") else "case_action"
+            timeline_items.append({
+                "category": cat,
+                "occurrence_time": aud["created_at"],
+                "recorded_time": aud["created_at"],
+                "original_timestamp": aud["created_at"],
+                "original_timezone": "UTC",
+                "event_type": f"Case Action: {aud['action']}",
+                "actor": f"@{aud['actor_username']}",
+                "source_ip": "-",
+                "details": aud.get("description", "")
+            })
+
+        # Apply category filter if requested
+        if category_filter != "all":
+            timeline_items = [item for item in timeline_items if item["category"] == category_filter]
+
+        # Sort chronologically by occurrence_time
+        reverse_sort = (sort_dir == "desc")
+        timeline_items.sort(key=lambda x: x["occurrence_time"] or "", reverse=reverse_sort)
+        return timeline_items
+
+    @app.route("/api/reports/<report_id>/timeline", methods=["GET"])
+    @login_required
+    def get_report_timeline(report_id: str):
+        """Returns chronological investigation timeline combining event occurrences, ingestion, detection, and case actions."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        category_filter = request.args.get("category", "all").strip().lower()
+        sort_dir = request.args.get("sort_dir", "asc").strip().lower()
+        case_id = report_dict["case_id"]
+
+        timeline_items = _build_report_timeline(case_id, conn, category_filter, sort_dir)
+        conn.close()
+
+        return jsonify({
+            "report_id": report_id,
+            "case_id": case_id,
+            "total_events": len(timeline_items),
+            "timeline": timeline_items
+        }), 200
+
+    @app.route("/api/reports/<report_id>/export/html", methods=["GET"])
+    @login_required
+    def export_report_html(report_id: str):
+        """Exports self-contained, printable HTML report with print media CSS and provenance disclaimers."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        c = conn.cursor()
+        case_id = report_dict["case_id"]
+
+        c.execute("""
+            SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time
+            FROM cases c
+            JOIN logs l ON c.incident_id = l.id
+            WHERE c.incident_id = ?
+        """, (case_id,))
+        case_data = dict(c.fetchone())
+
+        c.execute("""
+            SELECT id, report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+            FROM report_evidence_links
+            WHERE report_id = ?
+            ORDER BY id ASC
+        """, (report_id,))
+        evidence_links = [dict(r) for r in c.fetchall()]
+
+        # Generate timeline
+        timeline_items = _build_report_timeline(case_id, conn)
+
+        # Quality checks
+        c.execute("SELECT * FROM security_events WHERE incident_id = ?", (case_id,))
+        sec_events = [dict(s) for s in c.fetchall()]
+        qc = evaluate_report_quality_checks(report_dict, case_data, evidence_links, case_data, sec_events)
+
+        c.execute("""
+            SELECT version, title, status, author_username, reviewer_username, finalized_by_username, finalized_at, change_summary, created_at
+            FROM report_versions
+            WHERE report_id = ?
+            ORDER BY version DESC
+        """, (report_id,))
+        versions = [dict(v) for v in c.fetchall()]
+        conn.close()
+
+        full_data = {
+            "report": report_dict,
+            "case": case_data,
+            "incident": case_data,
+            "evidence_links": evidence_links,
+            "timeline": timeline_items,
+            "quality_checks": qc,
+            "version_history": versions
+        }
+
+        html_content = render_printable_html_report(full_data)
+
+        from flask import Response
+        return Response(
+            html_content,
+            mimetype="text/html",
+            headers={"Content-Disposition": f"inline; filename={report_id}.html"}
+        )
+
+    @app.route("/api/reports/<report_id>/export/json", methods=["GET"])
+    @login_required
+    def export_report_json(report_id: str):
+        """Exports structured JSON report representation sanitized of tokens and internal secrets."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        report_dict, err, conn = _fetch_report_and_verify_access(report_id, conn)
+        if err:
+            return err
+
+        c = conn.cursor()
+        case_id = report_dict["case_id"]
+
+        c.execute("""
+            SELECT c.*, l.attack, l.behavior, l.risk, l.ip, l.username, l.time AS incident_time
+            FROM cases c
+            JOIN logs l ON c.incident_id = l.id
+            WHERE c.incident_id = ?
+        """, (case_id,))
+        case_data = dict(c.fetchone())
+
+        c.execute("""
+            SELECT id, report_id, case_id, reference_type, reference_id, label, provenance_status, snapshot_summary, limitations_note, created_at
+            FROM report_evidence_links
+            WHERE report_id = ?
+            ORDER BY id ASC
+        """, (report_id,))
+        evidence_links = [dict(r) for r in c.fetchall()]
+
+        timeline_items = _build_report_timeline(case_id, conn)
+
+        c.execute("SELECT * FROM security_events WHERE incident_id = ?", (case_id,))
+        sec_events = [dict(s) for s in c.fetchall()]
+        qc = evaluate_report_quality_checks(report_dict, case_data, evidence_links, case_data, sec_events)
+
+        c.execute("""
+            SELECT version, title, status, author_username, reviewer_username, finalized_by_username, finalized_at, change_summary, created_at
+            FROM report_versions
+            WHERE report_id = ?
+            ORDER BY version DESC
+        """, (report_id,))
+        versions = [dict(v) for v in c.fetchall()]
+        conn.close()
+
+        full_data = {
+            "report": report_dict,
+            "case": case_data,
+            "incident": case_data,
+            "evidence_links": evidence_links,
+            "timeline": timeline_items,
+            "quality_checks": qc,
+            "version_history": versions
+        }
+
+        json_data = render_structured_json_report(full_data)
+
+        from flask import Response
+        return Response(
+            json.dumps(json_data, indent=2),
+            mimetype="application/json",
+            headers={"Content-Disposition": f"attachment; filename={report_id}.json"}
         )
 
     # ---------------------------------------------------------

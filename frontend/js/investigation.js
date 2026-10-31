@@ -698,6 +698,21 @@
       });
     }
 
+    // Generate Case Report button: jumps to #reports and opens report creation for current case
+    const genReportBtn = document.getElementById('case-generate-report-btn');
+    if (genReportBtn) {
+      genReportBtn.addEventListener('click', () => {
+        if (!currentIncidentId) {
+          window.UI.showToast('No active case selected.', 'warning');
+          return;
+        }
+        window.location.hash = 'reports';
+        if (window.Reports && window.Reports.openCreateModal) {
+          window.Reports.openCreateModal(currentIncidentId);
+        }
+      });
+    }
+
     // Reassign Analyst button
     const reassignBtn = document.getElementById('case-reassign-btn');
     if (reassignBtn) {
