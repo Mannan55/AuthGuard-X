@@ -1,181 +1,167 @@
-# AuthGuard-X — Security Operations Center (SOC) Simulation, Ingestion & Incident Investigation Platform
+# AuthGuard-X
 
-[![CI / Security & Quality Verification](https://github.com/Mannan55/AuthGuard-X/actions/workflows/ci.yml/badge.svg)](https://github.com/Mannan55/AuthGuard-X/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Flask](https://img.shields.io/badge/backend-Flask%203.1-black.svg)](https://flask.palletsprojects.com/)
-[![SQLite 3](https://img.shields.io/badge/database-SQLite%203%20WAL-lightgrey.svg)](https://www.sqlite.org/)
+**A local-first SOC training and incident investigation platform.**
+
+[![CI](https://github.com/Mannan55/AuthGuard-X/actions/workflows/ci.yml/badge.svg)](https://github.com/Mannan55/AuthGuard-X/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release: v3](https://img.shields.io/badge/release-v1.0.0-green.svg)](https://github.com/Mannan55/AuthGuard-X/releases/tag/v3)
+[![Source tag: v3](https://img.shields.io/badge/source_tag-v3-64748b.svg)](https://github.com/Mannan55/AuthGuard-X/tree/v3)
 
-AuthGuard-X is a professional, local-first Security Operations Center (SOC) demonstration, training, detection engineering, and incident response platform. Designed for cybersecurity analysts, educators, and blue teams, it models an enterprise identity and network security monitoring environment that ingests multi-format security logs, runs sliding-window detection rules, correlates threats against MITRE ATT&CK techniques, manages investigations through a 4-stage lifecycle state machine, and generates evidence-grounded investigation reports.
+## What does it do?
 
-> **Forensic Integrity & Provenance Disclaimer:** All attack vectors, simulated incident streams, and geographic origins are generated locally with server-enforced provenance (`is_simulated = 1`). Imported log files are hashed using SHA-256 upon ingestion (`exact_source_bytes`) to ensure chain-of-custody. AuthGuard-X does not execute live exploits or rely on unverified external threat feeds.
+AuthGuard-X is a practice control room for cybersecurity investigations. Generate a safe, synthetic attack scenario or import supported security logs, inspect detection alerts, investigate the associated incidents, and prepare evidence-linked reports.
 
----
+For example: simulate suspicious login activity, inspect the stored records and any alerts triggered by enabled rules, document your findings, then export an investigation report.
 
-## Visual Demonstration & SOC Workspaces
+**It creates training records; it does not attack remote computers.** Marking a case contained or resolved documents an investigation action; it does not itself block an IP address or disable an account.
 
-| Operational SOC Overview & Threat Telemetry | Incident Investigation & Lifecycle Workspace |
-|:---:|:---:|
-| ![Dashboard Overview](docs/screenshots/02_dashboard_overview.png) | ![Investigation Workspace](docs/screenshots/08_investigation_workspace.png) |
-| *Live KPI metrics, dynamic health posture, attack timeline & simulated vectors* | *4-stage investigation state machine (`New` → `Investigating` → `Contained` → `Resolved`)* |
+## Start with one workflow
 
-| Threat Detection & Correlated Alerts Feed | Evidence-Grounded Investigation Report Builder |
-|:---:|:---:|
-| ![Detection Alerts](docs/screenshots/11_detection_alerts_workspace.png) | ![Report Builder](docs/screenshots/26_report_builder_detail.png) |
-| *Sliding-window rule evaluations, MITRE ATT&CK techniques & 1-click case escalation* | *Data-grounded facts, structured analyst findings, QC checklist & printable exports* |
+1. Sign in using a local development account.
+2. Open **Simulations** and generate a scenario.
+3. Inspect the resulting **Incidents** and **Detection Alerts**, where rule conditions are met.
+4. Open an investigation, add notes and evidence, and document its status.
+5. Use **Case Reports** to review findings and export a report.
 
-<details>
-<summary><b>View Additional Workspace Screenshots (Event Explorer, Audit Timeline, Simulations Lab, Print Export)</b></summary>
-<br>
+For a walkthrough using imported logs, see the [Demo Guide](docs/DEMO_GUIDE.md).
 
-| Security Event Explorer & Normalization | Forensic Event Detail Modal |
-|:---:|:---:|
-| ![Event Explorer](docs/screenshots/18_event_explorer_workspace.png) | ![Event Detail Modal](docs/screenshots/19_event_detail_modal.png) |
-| *Searchable multi-format telemetry feed with batch provenance* | *Normalized forensic fields, UTC timestamps & SHA-256 byte hashes* |
+| Role | Purpose |
+| --- | --- |
+| SOC analyst | Review alerts, work assigned investigations, document evidence, and prepare reports. |
+| Administrator | Perform privileged administration and manage the training environment. |
 
-| Cyber Attack Simulation Lab | Incident Management Table |
-|:---:|:---:|
-| ![Simulations View](docs/screenshots/06_simulations_lab_view.png) | ![Incidents Table](docs/screenshots/03_incidents_table.png) |
-| *Controlled synthetic vector injection with city/risk targeting* | *Search by ID/text, severity/status/source filters & pagination* |
+Both roles share the workspace and sign-in page. Server permissions determine which operations are available. Simulation controls support training; they are not a separate customer-facing service.
 
-| Investigation Timeline & Evidence Metadata | Standalone Printable HTML Report Export |
-|:---:|:---:|
-| ![Timeline & Evidence](docs/screenshots/09_investigation_timeline_and_evidence.png) | ![Printable HTML Export](docs/screenshots/33_standalone_html_report_export.png) |
-| *Sanitized notes, IOC/pcap evidence pointers & append-only activity audit trail* | *Clean @media print layout with deterministic quality checklist* |
+## Workspace previews
 
-</details>
+These screenshots show existing workspaces from earlier captures; individual details may differ from the current source.
 
----
+| SOC overview | Investigation workspace |
+| --- | --- |
+| ![SOC dashboard](docs/screenshots/02_dashboard_overview.png) | ![Investigation workspace](docs/screenshots/08_investigation_workspace.png) |
 
-## Core Feature Overview (Sprints 1–5)
+| Detection alerts | Case reports |
+| --- | --- |
+| ![Detection alerts](docs/screenshots/11_detection_alerts_workspace.png) | ![Report builder](docs/screenshots/26_report_builder_detail.png) |
 
-### 1. Ingestion & Preprocessing (Sprint 4)
-- **Multi-Format Parsers**: Native parsing for Windows Event ID 4625 (Logon Failures), Linux `/var/log/auth.log` (sshd authentication), RFC 5424 Syslog, Palo Alto Firewall traffic, and newline-delimited JSON.
-- **Forensic Chain-of-Custody**: SHA-256 cryptographic hashing of exact raw input bytes (`exact_source_bytes`) to guarantee evidentiary traceability.
-- **Strict Timestamp Normalization**: UTC normalization preserving source timezone offsets, handling epoch seconds, epoch milliseconds, and malformed dates without synthetic invention.
+The main SOC dashboard and terminal-style simulation presentation serve different parts of the training experience. The geographic simulation map is not an external live attack feed.
 
-### 2. Detection Engineering & Threat Correlation (Sprint 3)
-- **Safe AST Rule Evaluation**: Schema-constrained rule conditions (`equals`, `contains`, `greater_than`, `in`, `regex_safe`) evaluated in Python memory without unsafe `eval()` or shell execution.
-- **Sliding-Window Correlation**: Configurable time windows (e.g., 60s for Credential Stuffing, 45s for Network Recon, 120s for Attack Bursts) aggregating multi-event patterns.
-- **Multi-Target Password Spray Enforcement**: Strictly requires distinct target usernames (`RULE-AUTH-003`), eliminating single-account false positives.
-- **MITRE ATT&CK Framework Mapping**: Direct alignment to techniques including T1110.001 (Password Spraying), T1046 (Network Service Discovery), T1190 (Exploit Public-Facing Application), and T1078 (Valid Accounts).
+## Capabilities
 
-### 3. Investigation Lifecycle & Case Management (Sprint 2)
-- **4-Stage Formal State Machine**: Progression from **New** $\rightarrow$ **Investigating** $\rightarrow$ **Contained** $\rightarrow$ **Resolved** with enforced prerequisite checks.
-- **Analyst Work Queues**: Claiming, personal active queue views, and role-based access control (`admin` vs `analyst`).
-- **Evidence Reference Validation**: Links to external evidence (PCAP files, IOC hashes) are validated against URL scheme whitelists (`http://`, `https://`), strictly blocking unsafe protocols (`javascript:`, `data:`, `file:`).
-- **Append-Only Auditing**: Full audit trail recording analyst reassignments, status transitions, containment timestamps, and note modifications.
+- **Training scenarios:** locally generated synthetic incidents with provenance labels.
+- **Log ingestion:** supported Windows failed-login records, Linux SSH authentication logs, RFC 5424 syslog, Palo Alto traffic logs, and newline-delimited JSON. See the demo guide for sample inputs.
+- **Detection engineering:** configurable rule conditions, time-window correlation, and MITRE ATT&CK references. Technique mappings provide classification context, not proof that an attack occurred.
+- **Incident investigation:** analyst queues, assignment, notes, evidence references, and the New → Investigating → Contained → Resolved lifecycle.
+- **Case reporting:** structured findings, linked evidence, deterministic quality checks, review/finalization, stored version snapshots, and HTML/JSON export. Printable HTML supports browser Print / Save as PDF; do not confuse that workflow with a native PDF generator.
+- **Security controls:** session authentication, bcrypt password hashing, CSRF protection, rate limiting, role checks, and version-conflict handling. Their presence does not establish production readiness or independent security certification.
 
-### 4. Evidence-Grounded SOC Reporting (Sprint 5)
-- **Zero Generative Hallucination**: Report claims are derived strictly from persisted security events, correlated detection alerts, case action logs, and verified evidence links.
-- **6 Deterministic Quality Indicators (QC)**:
-  1. Incident Classification Alignment
-  2. Telemetry Occurrence vs Recorded Latency
-  3. Correlated Detection Rule Coverage
-  4. Analyst Hypothesis & Finding Documentation
-  5. Evidence Reference Traceability
-  6. Containment Milestone Validation
-- **Immutable Version Snapshots**: Finalized reports are frozen in `report_versions` as full JSON snapshots. Re-exporting earlier versions (`?version=1`) guarantees 100% byte-for-byte reproducibility even after live cases mutate.
-- **Centralized Report Authorization**: Server-enforced permissions governing report viewing, editing, lifecycle state transitions, revisions, and exports based on case ownership and admin roles.
+## Architecture and stack
 
----
+Security records → SQLite storage → detection and correlation → investigation cases → reports.
 
-## Technology Stack
+| Layer | Technology |
+| --- | --- |
+| Backend | Python, Flask, Flask-WTF, Flask-Limiter, Flask-Cors |
+| Storage | SQLite |
+| Frontend | HTML, CSS, vanilla JavaScript, SVG assets |
+| External browser resources | Chart.js and Google Fonts loaded from CDNs |
+| Validation | Pytest and a separate Chromium CDP capture script |
+| CI | Python 3.11, 3.12, and 3.13 on Ubuntu and Windows |
 
-- **Backend**: Python 3.11+, Flask 3.1, Flask-WTF (CSRF), Flask-Limiter (Rate Limiting), Werkzeug.
-- **Database**: SQLite 3 with Write-Ahead Logging (WAL) and foreign key integrity.
-- **Cryptography**: `bcrypt` (12 rounds) for passwords, `hashlib.sha256` for forensic source integrity.
-- **Frontend**: Vanilla ES6+ JavaScript (zero external CDN or node_modules dependencies), custom CSS design tokens (8px grid), native SVG icons.
-- **Testing**: `pytest`, `pytest-cov`, and automated Chromium CDP browser verification.
-- **CI/CD**: GitHub Actions matrix across Python 3.11, 3.12, 3.13 on Ubuntu and Windows.
+Application records are stored locally. CDN resources may require internet access; local-first does not mean that every browser asset is bundled for offline use.
 
----
+## Installation
 
-## Installation & Setup
+Requires Git and Python 3.11 or later.
 
-### Prerequisites
-- Python 3.11 or higher installed.
-- Git.
-
-### 1. Clone Repository
 ```bash
 git clone https://github.com/Mannan55/AuthGuard-X.git
 cd AuthGuard-X
 ```
 
-### 2. Create and Activate Virtual Environment
+Create and activate a virtual environment using the commands for your terminal.
 
-**Windows (PowerShell):**
+**Windows Command Prompt:**
+
+```bat
+python -m venv venv
+venv\Scripts\activate.bat
+```
+
+**Windows PowerShell:**
+
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
 **Linux / macOS:**
+
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Install Dependencies
-```bash
-pip install --upgrade pip
-pip install -r backend/requirements.txt
-```
+Install dependencies and start the application:
 
-### 4. Run Application
 ```bash
+python -m pip install -r backend/requirements.txt
 python backend/app.py
 ```
-Open your browser and navigate to:
-```
-http://127.0.0.1:5000/
-```
 
----
+Open **http://127.0.0.1:5000/**. See [.env.example](.env.example) for configuration options.
 
-## Development Demo Credentials
+### Local development accounts
 
-AuthGuard-X includes development demo accounts for local evaluation and testing:
+Default seeded accounts for development mode:
 
-| Role | Username | Password | Permissions |
-| :--- | :--- | :--- | :--- |
-| **Administrator** | `admin` *(or `testadmin`)* | `DemoAdminPassword2026!` *(or `admin123`)* | Full access across all cases, rules, ingestion batches, and reports. |
-| **SOC Analyst** | `analyst_john` | `AnalystPassword2026!` | Access to assigned cases, evidence linking, and personal reports. |
-| **SOC Analyst** | `analyst_jane` | `AnalystPassword2026!` | Isolated queue for multi-analyst access testing. |
+| Role | Username | Default password |
+| --- | --- | --- |
+| Administrator | `admin` | `DemoAdmin2026!` |
+| Analyst | `analyst_john` | `AnalystPassword2026!` |
+| Analyst | `analyst_jane` | `AnalystPassword2026!` |
 
-> [!WARNING]
-> Demo accounts are provisioned exclusively when running in development mode (`DEMO_MODE=true`). For production deployments, set `AUTHGUARD_ENV=production` and `DEMO_MODE=false`.
+The admin account can be configured with `DEMO_ADMIN_USER` and `DEMO_ADMIN_PASSWORD`. Existing admin accounts may retain an earlier password. The current development login also accepts legacy password aliases; keep demo mode limited to local training. `testadmin` is used by CI configuration, not the default installation username.
 
----
+Demo seeding requires development mode with `DEMO_MODE=true` and `SEED_DEMO_USER=true`. Changing production environment flags alone is not a complete production deployment or hardening procedure.
 
-## Running the Automated Test Suite
+## Evidence and limitations
 
-### Full Pytest Suite (161 Tests)
+- Synthetic incidents and map origins are training data. Imported records remain unverified input.
+- SHA-256 hashes help identify content changes. They do not establish source authenticity or prove a forensic chain of custody. Exact source-byte hashes and normalized-payload hashes have different meanings.
+- Reports distinguish recorded information from analyst conclusions. Finalization and checklist completion do not independently verify forensic accuracy.
+- Stored report snapshots support historical versions. Validate version-specific export behavior for your use case rather than relying on an unconditional byte-for-byte guarantee.
+- This is a demonstration and training project, not a replacement for a deployed enterprise SIEM, endpoint protection, or a response team.
+
+## Verification
+
+Run backend tests from the repository root:
+
 ```bash
-pytest tests -v
+python -m pytest tests -v
 ```
 
-### Real-Browser Chromium CDP Verification (34 Assertions)
+An earlier local validation in this project workflow reported **161 passed**. That is historical evidence, not a fresh result for every later commit. Check the [Actions page](https://github.com/Mannan55/AuthGuard-X/actions) for the run associated with the source revision you use.
+
+The separate capture script documents browser workflows:
+
 ```bash
 python scripts/capture_evidence.py
 ```
 
-All 34 browser assertions—including layout verification on 390px, 768px, 1440px, and 1920px viewports, modal interactions, simulation runs, and standalone HTML export rendering—will execute and output fresh screenshots into `docs/screenshots/`.
+It imports `websocket` (provided by `websocket-client`) and currently looks for Chrome/Edge in Windows installation paths. It is not an environment-independent browser test runner; inspect its requirements before running it. Earlier reported browser assertion totals are not a claim that this documentation update reran them.
 
----
+## Documentation and versions
 
-## Documentation Quick Links
+- [Architecture](docs/ARCHITECTURE.md)
+- [Demo Guide](docs/DEMO_GUIDE.md)
+- [Presentation Outline](docs/PRESENTATION_OUTLINE.md)
+- [v3 development notes](docs/RELEASE_NOTES_v3.0.md)
+- [v1.0 release notes](docs/RELEASE_NOTES_v1.0.md)
+- [Repository presentation settings](docs/REPOSITORY_PRESENTATION.md)
 
-- [Technical Architecture Specification (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md)
-- [5-Minute Analyst Demo Guide (`docs/DEMO_GUIDE.md`)](docs/DEMO_GUIDE.md)
-- [Presentation Outline (8–10 Slides) (`docs/PRESENTATION_OUTLINE.md`)](docs/PRESENTATION_OUTLINE.md)
-- [v3.0.0 Release Notes (`docs/RELEASE_NOTES_v3.0.md`)](docs/RELEASE_NOTES_v3.0.md)
-- [v1.0.0 Legacy Release Notes (`docs/RELEASE_NOTES_v1.0.md`)](docs/RELEASE_NOTES_v1.0.md)
-
----
+The repository has source tags including `v1.0.0`, `v1.0.0-original`, `v2`, and `v3`. A Git tag and a published GitHub Release are separate things. No published release was returned by GitHub's Releases API during this documentation review. The `v3` badge links to tagged source; current `main` may include later changes.
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+[MIT License](LICENSE), copyright Mannan Shah.
