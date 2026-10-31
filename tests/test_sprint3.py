@@ -801,13 +801,12 @@ def test_correlation_window_expiration_prevents_infinite_accumulation(test_env):
         conn = get_db_connection(db_path)
         c = conn.cursor()
 
+        now = datetime.now()
         # Window for RULE-AUTH-001 is 60 seconds
-        base_time = datetime(2026, 10, 31, 8, 0, 0)
-
-        # First wave of 3 events at 08:00:10, 08:00:20, 08:00:30 (all within 60s)
+        # First wave of 3 events occurred 180 seconds ago (-170s, -160s, -150s), safely outside the 60s cutoff
         wave1_ids = []
         for s in (10, 20, 30):
-            t = (base_time + timedelta(seconds=s)).strftime("%Y-%m-%d %H:%M:%S")
+            t = (now - timedelta(seconds=180 - s)).strftime("%Y-%m-%d %H:%M:%S")
             c.execute("""
                 INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
                 VALUES ('target_user', 'Credential Stuffing', 'brute_force', 70, '192.0.2.1', 'London', ?, 0, 1)
@@ -831,11 +830,10 @@ def test_correlation_window_expiration_prevents_infinite_accumulation(test_env):
         initial_alert_id = alerts_wave1[0]["alert_id"]
         assert alerts_wave1[0]["matched_count"] == 3
 
-        # Second wave occurs 10 minutes later at 08:10:00 (well past 60s window)
-        wave2_time = base_time + timedelta(minutes=10)
+        # Second wave occurs within the recent sliding window (-25s, -20s, -15s), well past wave 1's window
         wave2_ids = []
-        for s in (10, 20, 30):
-            t = (wave2_time + timedelta(seconds=s)).strftime("%Y-%m-%d %H:%M:%S")
+        for s in (5, 10, 15):
+            t = (now - timedelta(seconds=30 - s)).strftime("%Y-%m-%d %H:%M:%S")
             c.execute("""
                 INSERT INTO logs (username, attack, behavior, risk, ip, location, time, resolved, is_simulated)
                 VALUES ('target_user', 'Credential Stuffing', 'brute_force', 70, '192.0.2.1', 'London', ?, 0, 1)
