@@ -1,0 +1,5 @@
+{"timestamp": "2026-10-31 09:00:01", "ip": "10.0.0.25", "dest_ip": "10.0.0.1", "username": "claire", "attack": "Workstation Authentication", "category": "Authentication", "hostname": "WS-FINANCE-03", "outcome": "success", "risk": 10, "behavior": "Kerberos TGT renewal"}
+{"timestamp": "2026-10-31 09:00:15", "ip": "10.0.0.26", "dest_ip": "10.0.0.2", "username": "marcus", "attack": "Web Portal Access", "category": "Network", "hostname": "WS-DEV-12", "outcome": "success", "risk": 15, "behavior": "Authenticated HTTPS session via corporate Okta"}
+{"timestamp": "2026-10-31 09:01:00", "ip": "10.0.0.30", "dest_ip": "10.0.0.5", "username": "build_agent", "attack": "CI/CD Pipeline Trigger", "category": "Automation", "hostname": "JENKINS-SLAVE-01", "outcome": "success", "risk": 5, "behavior": "Automated code checkout over SSH"}
+{"timestamp": "2026-10-31 09:02:40", "ip": "10.0.0.100", "dest_ip": "10.0.0.1", "username": "guest_wifi_user", "attack": "Captive Portal Logon", "category": "Authentication", "hostname": "GUEST-WIFI-AP", "outcome": "success", "risk": 20, "behavior": "Guest network self-registration"}
+

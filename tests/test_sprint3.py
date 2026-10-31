@@ -9,7 +9,7 @@ import sys
 BASE_DIR = Path(__file__).resolve().parent.parent / "backend"
 sys.path.insert(0, str(BASE_DIR))
 
-from app import create_app, get_db_connection, evaluate_detection_pipeline
+from app import create_app, get_db_connection, evaluate_detection_pipeline, init_db
 
 @pytest.fixture
 def test_env(tmp_path):
@@ -934,6 +934,152 @@ def test_sqlite_migration_foreign_key_integrity(test_env):
         assert "incident_id" in cols
         assert "evaluated_at" in cols
         conn.close()
+
+
+def test_populated_legacy_database_migration_and_foreign_key_enforcement(tmp_path):
+    """Verify that a populated legacy SQLite database (Sprint 1/2 schema) is safely upgraded,
+    preserving all existing records and passing PRAGMA foreign_key_check.
+    Furthermore, verify that foreign key violations cause migration to fail loudly with RuntimeError
+    rather than silently continuing.
+    """
+    db_file = tmp_path / "legacy_populated.db"
+    conn = sqlite3.connect(str(db_file))
+    c = conn.cursor()
+
+    # Create baseline legacy schema (pre-Sprint 3)
+    c.execute('''
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'analyst',
+            created_at TEXT NOT NULL
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            time TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            attack TEXT NOT NULL,
+            risk INTEGER NOT NULL,
+            behavior TEXT,
+            location TEXT,
+            resolved INTEGER DEFAULT 0,
+            username TEXT,
+            is_simulated INTEGER DEFAULT 0
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE cases (
+            incident_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'new',
+            assigned_to INTEGER,
+            assigned_username TEXT,
+            assigned_at TEXT,
+            investigation_started_at TEXT,
+            contained_at TEXT,
+            resolved_at TEXT,
+            resolution_summary TEXT,
+            reopen_count INTEGER NOT NULL DEFAULT 0,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE CASCADE,
+            FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE incident_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            incident_id INTEGER NOT NULL,
+            actor_id INTEGER,
+            actor_username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            before_value TEXT,
+            after_value TEXT,
+            description TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE CASCADE,
+            FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE system_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_id INTEGER,
+            actor_username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            details TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+    ''')
+
+    # Populate genuine legacy records
+    c.execute("INSERT INTO users (username, password_hash, role, created_at) VALUES ('legacy_analyst', 'hash123', 'analyst', '2026-10-25 10:00:00')")
+    user_id = c.lastrowid
+
+    c.execute("INSERT INTO logs (time, ip, attack, risk, behavior, location, resolved, username, is_simulated) VALUES ('2026-10-25 10:05:00', '198.51.100.1', 'Brute Force', 80, 'auth_fail', 'Dallas', 0, 'victim', 0)")
+    log_id = c.lastrowid
+
+    c.execute("INSERT INTO cases (incident_id, status, assigned_to, assigned_username, created_at, updated_at) VALUES (?, 'new', ?, 'legacy_analyst', '2026-10-25 10:05:00', '2026-10-25 10:05:00')", (log_id, user_id))
+
+    c.execute("INSERT INTO incident_audit_log (incident_id, actor_id, actor_username, action, created_at) VALUES (?, ?, 'legacy_analyst', 'created', '2026-10-25 10:05:00')", (log_id, user_id))
+    c.execute("INSERT INTO system_audit_log (actor_id, actor_username, action, details, created_at) VALUES (?, 'legacy_analyst', 'system_init', 'Pre-existing audit', '2026-10-25 10:00:00')", (user_id,))
+    conn.commit()
+    conn.close()
+
+    # Part A: Run init_db migration on genuine populated database
+    init_db(str(db_file), "development", False, False, "admin", "AdminPassword2026!")
+
+    # Verify data preservation and migration success
+    conn_migrated = get_db_connection(str(db_file))
+    cur = conn_migrated.cursor()
+
+    cur.execute("PRAGMA foreign_key_check")
+    fk_checks = cur.fetchall()
+    assert len(fk_checks) == 0, f"Foreign key checks failed after migration: {fk_checks}"
+
+    cur.execute("SELECT COUNT(*) AS c FROM users WHERE username = 'legacy_analyst'")
+    assert cur.fetchone()["c"] == 1
+
+    cur.execute("SELECT COUNT(*) AS c FROM logs WHERE id = ?", (log_id,))
+    assert cur.fetchone()["c"] == 1
+
+    cur.execute("SELECT COUNT(*) AS c FROM cases WHERE incident_id = ?", (log_id,))
+    assert cur.fetchone()["c"] == 1
+
+    cur.execute("SELECT COUNT(*) AS c FROM incident_audit_log WHERE incident_id = ?", (log_id,))
+    assert cur.fetchone()["c"] == 1
+
+    cur.execute("SELECT COUNT(*) AS c FROM system_audit_log")
+    assert cur.fetchone()["c"] == 1
+
+    cur.execute("SELECT COUNT(*) AS c FROM detection_rules")
+    assert cur.fetchone()["c"] >= 6
+    conn_migrated.close()
+
+    # Part B: Verify that foreign-key integrity violations CANNOT silently continue
+    corrupt_db_file = tmp_path / "corrupt_fk.db"
+    conn_corrupt = sqlite3.connect(str(corrupt_db_file))
+    c2 = conn_corrupt.cursor()
+    c2.execute("PRAGMA foreign_keys = OFF")
+    c2.execute('''
+        CREATE TABLE logs (id INTEGER PRIMARY KEY, time TEXT, ip TEXT, attack TEXT, risk INTEGER)
+    ''')
+    c2.execute('''
+        CREATE TABLE cases (incident_id INTEGER PRIMARY KEY, status TEXT, FOREIGN KEY (incident_id) REFERENCES logs(id))
+    ''')
+    # Insert orphan case referencing non-existent incident_id 99999
+    c2.execute("INSERT INTO cases (incident_id, status) VALUES (99999, 'new')")
+    conn_corrupt.commit()
+    conn_corrupt.close()
+
+    # Running init_db MUST fail loudly with RuntimeError, not continue silently
+    with pytest.raises(RuntimeError) as exc_info:
+        init_db(str(corrupt_db_file), "development", False, False, "admin", "AdminPassword2026!")
+    assert "foreign key integrity check failed" in str(exc_info.value)
 
 
 def test_alert_escalation_case_assignment_version_increment_and_concurrency(test_env):

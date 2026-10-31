@@ -1,0 +1,11 @@
+Oct 31 09:15:01 bastion-01 sshd[24101]: Failed password for root from 198.51.100.99 port 49152 ssh2
+Oct 31 09:15:04 bastion-01 sshd[24104]: Failed password for root from 198.51.100.99 port 49154 ssh2
+Oct 31 09:15:07 bastion-01 sshd[24108]: Failed password for invalid user oracle from 198.51.100.99 port 49156 ssh2
+Oct 31 09:15:10 bastion-01 sshd[24112]: Failed password for invalid user postgres from 198.51.100.99 port 49158 ssh2
+Oct 31 09:15:13 bastion-01 sshd[24116]: Failed password for admin from 198.51.100.99 port 49160 ssh2
+Oct 31 09:15:16 bastion-01 sshd[24120]: Failed password for test from 198.51.100.99 port 49162 ssh2
+Oct 31 09:16:00 bastion-01 sshd[24135]: Accepted publickey for secops from 192.168.1.80 port 52340 ssh2
+Oct 31 09:17:22 bastion-01 sshd[24140]: Failed password for root from 203.0.113.60 port 55110 ssh2
+Oct 31 09:17:25 bastion-01 sshd[24142]: Failed password for root from 203.0.113.60 port 55112 ssh2
+Oct 31 09:18:10 bastion-01 sshd[24155]: Accepted password for lead_analyst from 192.168.1.82 port 53114 ssh2
+

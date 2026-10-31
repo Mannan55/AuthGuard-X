@@ -8,6 +8,8 @@ import json
 import hashlib
 import uuid
 import re
+import io
+import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -19,6 +21,18 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 import bcrypt
 from dotenv import load_dotenv
+
+# Sprint 4: Security Log Ingestion & Normalization Engine Imports
+try:
+    from ingestion import (
+        IngestionParser, sanitize_csv_formula, calculate_fingerprint,
+        is_valid_ip, MAX_FILE_SIZE, MAX_RECORDS_PER_BATCH
+    )
+except ImportError:
+    from backend.ingestion import (
+        IngestionParser, sanitize_csv_formula, calculate_fingerprint,
+        is_valid_ip, MAX_FILE_SIZE, MAX_RECORDS_PER_BATCH
+    )
 
 # Sprint 3: Detection Engineering Constants & Allowed Allowlist Definitions
 ALLOWED_RULE_FIELDS = {
@@ -206,11 +220,13 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
         )
     ''')
 
-    # Safe migration: ensure is_simulated column exists in logs
+    # Safe migration: ensure is_simulated and provenance columns exist in logs
     c.execute("PRAGMA table_info(logs)")
     columns = [row["name"] for row in c.fetchall()]
     if "is_simulated" not in columns:
         c.execute("ALTER TABLE logs ADD COLUMN is_simulated INTEGER DEFAULT 0")
+    if "provenance" not in columns:
+        c.execute("ALTER TABLE logs ADD COLUMN provenance TEXT DEFAULT 'synthetic'")
 
     # Sprint 2: Cases table (Lifecycle: new -> investigating -> contained -> resolved)
     c.execute('''
@@ -233,13 +249,31 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
         )
     ''')
 
-    # Safe migration: ensure reopen_count and version columns exist in cases
+    # Safe migration: ensure all required columns exist in cases
     c.execute("PRAGMA table_info(cases)")
     case_cols = [row["name"] for row in c.fetchall()]
+    if "assigned_to" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN assigned_to INTEGER")
+    if "assigned_username" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN assigned_username TEXT")
+    if "assigned_at" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN assigned_at TEXT")
+    if "investigation_started_at" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN investigation_started_at TEXT")
+    if "contained_at" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN contained_at TEXT")
+    if "resolved_at" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN resolved_at TEXT")
+    if "resolution_summary" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN resolution_summary TEXT")
     if "reopen_count" not in case_cols:
         c.execute("ALTER TABLE cases ADD COLUMN reopen_count INTEGER NOT NULL DEFAULT 0")
     if "version" not in case_cols:
         c.execute("ALTER TABLE cases ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+    if "created_at" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN created_at TEXT")
+    if "updated_at" not in case_cols:
+        c.execute("ALTER TABLE cases ADD COLUMN updated_at TEXT")
 
     # Sprint 2: Investigation notes table
     c.execute('''
@@ -531,13 +565,62 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
         ''')
         c.execute("DROP TABLE detection_alerts_migration_old")
 
+    # Sprint 4: Security Log Ingestion Batches table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS ingestion_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT UNIQUE NOT NULL,
+            filename TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            total_records INTEGER NOT NULL DEFAULT 0,
+            accepted_records INTEGER NOT NULL DEFAULT 0,
+            rejected_records INTEGER NOT NULL DEFAULT 0,
+            duplicate_records INTEGER NOT NULL DEFAULT 0,
+            created_by INTEGER NOT NULL,
+            created_username TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('completed', 'partial', 'failed')),
+            errors_json TEXT,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+    ''')
+
+    # Sprint 4: Normalized Security Events table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS security_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT UNIQUE NOT NULL,
+            batch_id TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            importer TEXT NOT NULL,
+            event_time TEXT NOT NULL,
+            ingested_at TEXT NOT NULL,
+            category TEXT NOT NULL,
+            attack_type TEXT NOT NULL,
+            username TEXT,
+            source_ip TEXT NOT NULL,
+            dest_ip TEXT,
+            hostname TEXT,
+            outcome TEXT NOT NULL CHECK(outcome IN ('success', 'failure', 'blocked', 'unknown')),
+            severity TEXT NOT NULL CHECK(severity IN ('critical', 'high', 'medium', 'low', 'info')),
+            risk_score INTEGER NOT NULL CHECK(risk_score >= 0 AND risk_score <= 100),
+            source_record_ref TEXT,
+            fingerprint TEXT UNIQUE NOT NULL,
+            provenance TEXT NOT NULL DEFAULT 'imported_unverified' CHECK(provenance IN ('synthetic', 'imported_unverified', 'system')),
+            metadata_json TEXT,
+            incident_id INTEGER,
+            FOREIGN KEY (batch_id) REFERENCES ingestion_batches(batch_id) ON DELETE CASCADE,
+            FOREIGN KEY (incident_id) REFERENCES logs(id) ON DELETE SET NULL
+        )
+    ''')
+
     c.execute("PRAGMA foreign_keys = ON")
 
     # Verify foreign key integrity across all tables
     c.execute("PRAGMA foreign_key_check")
     fk_errors = c.fetchall()
     if fk_errors:
-        print(f"[Database] Warning: SQLite foreign key integrity check found violations: {fk_errors}")
+        raise RuntimeError(f"Database migration aborted: SQLite foreign key integrity check failed with violations: {fk_errors}")
 
     # Sprint 3: Performance indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_rules_status ON detection_rules(status)")
@@ -549,6 +632,17 @@ def init_db(db_path: str, app_env: str, demo_mode: bool, seed_demo: bool,
     c.execute("CREATE INDEX IF NOT EXISTS idx_rule_audit_rule ON rule_audit_log(rule_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_rule_exec_rule ON rule_executions(rule_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_eval_events_id ON evaluated_events(incident_id)")
+
+    # Sprint 4: Performance indexes
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_batch ON security_events(batch_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_time ON security_events(event_time)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_ip ON security_events(source_ip)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_username ON security_events(username)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_source_type ON security_events(source_type)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_category ON security_events(category)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_provenance ON security_events(provenance)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sec_events_fingerprint ON security_events(fingerprint)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_batches_created_by ON ingestion_batches(created_by)")
 
     # Idempotent seeding and safe migration of default detection rules
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -988,19 +1082,22 @@ def incident_matches_rule(incident: dict, conditions: list[dict]) -> bool:
             return False
     return True
 
-def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: str = None) -> list[dict]:
+def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: str = None, reference_time: datetime = None) -> list[dict]:
     """
     Evaluates enabled detection rules against recent security events,
     correlates matching incidents by group_by_field, prevents duplicate alerts
     via deterministic idempotency hashing, and persists correlated detection alerts.
+    Supports deterministic historical timestamp evaluation for imported SOC telemetry.
     Returns list of newly generated alert dictionaries.
     """
     if db_path is None:
         try:
             from flask import current_app
-            db_path = current_app.config.get("DATABASE_PATH", str(DATABASE_PATH))
+            db_path = current_app.config.get("DATABASE_PATH")
         except Exception:
-            db_path = str(DATABASE_PATH)
+            db_path = None
+        if not db_path:
+            db_path = "authguard.db"
 
     conn = get_db_connection(db_path)
     c = conn.cursor()
@@ -1015,8 +1112,22 @@ def evaluate_detection_pipeline(target_incident_ids: list[int] = None, db_path: 
     rules = [dict(r) for r in c.fetchall()]
 
     newly_generated_alerts = []
-    now = datetime.now()
-    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    real_wall_clock_now = datetime.now()
+    now = reference_time if reference_time else real_wall_clock_now
+    now_str = real_wall_clock_now.strftime("%Y-%m-%d %H:%M:%S")
+
+    # If target incidents are provided without explicit reference_time, check if they are historical telemetry
+    if target_incident_ids and reference_time is None:
+        try:
+            placeholders = ",".join("?" for _ in target_incident_ids)
+            c.execute(f"SELECT MAX(time) AS max_t FROM logs WHERE id IN ({placeholders})", target_incident_ids)
+            max_row = c.fetchone()
+            if max_row and max_row["max_t"]:
+                max_dt = datetime.strptime(max_row["max_t"], "%Y-%m-%d %H:%M:%S")
+                if (real_wall_clock_now - max_dt).total_seconds() > 300:
+                    now = max_dt
+        except Exception:
+            pass
 
     for rule in rules:
         try:
@@ -3911,6 +4022,8 @@ def create_app(test_config=None) -> Flask:
         c.execute("SELECT COUNT(*) AS total_logs FROM logs")
         total_events_stored = c.fetchone()["total_logs"]
 
+        # Note: evaluated_events represents the count of unique incidents/telemetry events processed
+        # by the threat correlation pipeline (tracked in evaluated_events), not the total number of per-rule evaluations.
         c.execute("SELECT COUNT(*) AS evaluated_count FROM evaluated_events")
         actual_evaluated_events = c.fetchone()["evaluated_count"]
 
@@ -3959,6 +4072,7 @@ def create_app(test_config=None) -> Flask:
             "escalated_alerts": escalated_alerts,
             "closed_alerts": closed_alerts,
             "evaluated_events": actual_evaluated_events,
+            "evaluated_unique_incidents": actual_evaluated_events,
             "total_events_stored": total_events_stored,
             "rule_executions_count": rule_executions_count,
             "active_correlations_count": active_correlations_count,
@@ -4044,6 +4158,732 @@ def create_app(test_config=None) -> Flask:
             "incident_ids": injected_ids,
             "alerts_generated": len(alerts_generated)
         }), 201
+
+    # ---------------------------------------------------------
+    # Sprint 4: Security Log Ingestion & Normalization Endpoints
+    # ---------------------------------------------------------
+
+    @app.route("/api/ingestion/import", methods=["POST"])
+    @login_required
+    @limiter.limit("30 per minute")
+    def import_security_logs():
+        """
+        Accepts security log uploads or raw text payloads across supported formats:
+        - Canonical CSV
+        - NDJSON
+        - Windows Security Events (4624/4625)
+        - Linux SSH Auth Logs
+        - Zeek Connection Logs (JSON)
+
+        Performs:
+        - Format validation & local normalization
+        - Deduplication via deterministic fingerprint hashing
+        - Ingestion batch tracking
+        - Integration into security_events and logs tables (provenance='imported_unverified')
+        - Deterministic detection pipeline evaluation
+        - System audit trail logging
+        """
+        user_id = session.get("user_id")
+        username = session.get("username", "unknown")
+        
+        dry_run = False
+        format_name = "auto"
+        filename = "pasted_log.txt"
+        content = ""
+
+        if request.content_type and "multipart/form-data" in request.content_type:
+            uploaded_file = request.files.get("file")
+            format_name = request.form.get("format", "auto")
+            dry_run = request.form.get("dry_run", "false").lower() in ("true", "1")
+            if not uploaded_file:
+                content = request.form.get("content", "")
+                if not content:
+                    return jsonify({"error": "Bad Request", "message": "No file or log content provided."}), 400
+                filename = request.form.get("filename", "manual_import.txt")
+            else:
+                raw_filename = uploaded_file.filename or "uploaded_log.txt"
+                filename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', os.path.basename(raw_filename))
+                try:
+                    content_bytes = uploaded_file.read()
+                    if len(content_bytes) > MAX_FILE_SIZE:
+                        return jsonify({"error": "Payload Too Large", "message": f"File exceeds maximum allowed size of {MAX_FILE_SIZE // (1024*1024)} MB."}), 413
+                    content = content_bytes.decode("utf-8", errors="replace")
+                except Exception as e:
+                    return jsonify({"error": "Bad Request", "message": f"Failed to read uploaded file: {str(e)}"}), 400
+        else:
+            data = request.get_json(silent=True) or {}
+            content = data.get("content", "")
+            format_name = data.get("format", "auto")
+            raw_filename = data.get("filename", "api_import.txt")
+            dry_run = bool(data.get("dry_run", False))
+            filename = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', os.path.basename(raw_filename))
+
+        if not content or not content.strip():
+            return jsonify({"error": "Bad Request", "message": "Import content cannot be empty."}), 400
+
+        if len(content.encode("utf-8")) > MAX_FILE_SIZE:
+            return jsonify({"error": "Payload Too Large", "message": f"Payload exceeds maximum allowed size of {MAX_FILE_SIZE // (1024*1024)} MB."}), 413
+
+        records, parse_errors, detected_format = IngestionParser.parse_content(content, format_name=format_name, filename=filename)
+
+        if not records and parse_errors:
+            return jsonify({
+                "error": "Bad Request",
+                "message": "Failed to parse security events from input.",
+                "format": detected_format,
+                "errors": parse_errors[:20]
+            }), 400
+
+        if dry_run:
+            return jsonify({
+                "status": "dry_run",
+                "format": detected_format,
+                "filename": filename,
+                "total_records_found": len(records),
+                "parse_errors_count": len(parse_errors),
+                "parse_errors": parse_errors[:10],
+                "sample_preview": records[:3]
+            }), 200
+
+        batch_id = f"bch_{uuid.uuid4().hex[:12]}"
+        now_dt = datetime.now()
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        accepted_count = 0
+        duplicate_count = 0
+        rejected_count = len(parse_errors)
+        new_incident_ids = []
+        batch_timestamps = []
+
+        try:
+            c.execute("""
+                INSERT INTO ingestion_batches (
+                    batch_id, filename, source_type, total_records, accepted_records,
+                    rejected_records, duplicate_records, created_by, created_username,
+                    created_at, status, errors_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                batch_id, filename, detected_format, len(records) + len(parse_errors),
+                0, rejected_count, 0, user_id, username, now_str, "partial",
+                json.dumps(parse_errors[:50])
+            ))
+
+            for rec in records:
+                evt_time = rec["event_time"]
+                batch_timestamps.append(evt_time)
+                src_ip = rec["source_ip"]
+                dest_ip = rec.get("dest_ip")
+                uname = rec.get("username") or "unknown"
+                atk = rec["attack_type"]
+                outcome = rec["outcome"]
+                category = rec.get("category", "Authentication")
+                hostname = rec.get("hostname", "sec-host")
+                severity = rec.get("severity", "medium")
+                risk = rec.get("risk_score", 50)
+                behavior = rec.get("behavior", f"{atk} observed")
+                src_ref = rec.get("source_record_ref", "")
+                metadata_str = json.dumps(rec.get("metadata", {}))
+
+                fingerprint = calculate_fingerprint(
+                    detected_format, evt_time, src_ip, dest_ip, uname, atk, outcome
+                )
+
+                # Check duplicate fingerprint
+                c.execute("SELECT id FROM security_events WHERE fingerprint = ?", (fingerprint,))
+                existing_evt = c.fetchone()
+                if existing_evt:
+                    duplicate_count += 1
+                    continue
+
+                event_id = f"evt_{uuid.uuid4().hex[:12]}"
+
+                # Insert into logs (as imported telemetry)
+                c.execute("""
+                    INSERT INTO logs (
+                        time, ip, attack, risk, behavior, location, resolved, username, is_simulated, provenance
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 'imported_unverified')
+                """, (
+                    evt_time, src_ip, atk, risk, behavior, hostname, uname
+                ))
+                log_id = c.lastrowid
+                new_incident_ids.append(log_id)
+
+                # Create case for the incident
+                c.execute("""
+                    INSERT INTO cases (
+                        incident_id, status, reopen_count, version, created_at, updated_at
+                    ) VALUES (?, 'new', 0, 1, ?, ?)
+                """, (log_id, now_str, now_str))
+
+                # Insert into security_events
+                c.execute("""
+                    INSERT INTO security_events (
+                        event_id, batch_id, source_type, importer, event_time, ingested_at,
+                        category, attack_type, username, source_ip, dest_ip, hostname,
+                        outcome, severity, risk_score, source_record_ref, fingerprint,
+                        provenance, metadata_json, incident_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported_unverified', ?, ?)
+                """, (
+                    event_id, batch_id, detected_format, username, evt_time, now_str,
+                    category, atk, uname, src_ip, dest_ip, hostname,
+                    outcome, severity, risk, src_ref, fingerprint, metadata_str, log_id
+                ))
+
+                accepted_count += 1
+
+            batch_status = "completed" if rejected_count == 0 else "partial"
+            if accepted_count == 0 and (duplicate_count > 0 or rejected_count > 0):
+                batch_status = "completed" if duplicate_count > 0 else "failed"
+
+            c.execute("""
+                UPDATE ingestion_batches
+                SET accepted_records = ?, duplicate_records = ?, rejected_records = ?, status = ?
+                WHERE batch_id = ?
+            """, (accepted_count, duplicate_count, rejected_count, batch_status, batch_id))
+
+            # Record system audit log
+            c.execute("""
+                INSERT INTO system_audit_log (
+                    actor_id, actor_username, action, target, reason, details, created_at
+                ) VALUES (?, ?, 'import_security_events', ?, ?, ?, ?)
+            """, (
+                user_id, username, f"batch:{batch_id}",
+                f"Imported {accepted_count} security events ({detected_format})",
+                json.dumps({
+                    "batch_id": batch_id,
+                    "filename": filename,
+                    "accepted": accepted_count,
+                    "duplicates": duplicate_count,
+                    "rejected": rejected_count
+                }),
+                now_str
+            ))
+
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            return jsonify({"error": "Internal Server Error", "message": f"Failed to persist imported batch: {str(e)}"}), 500
+
+        conn.close()
+
+        # Trigger detection evaluation with deterministic historical timing
+        correlated_alerts = []
+        if new_incident_ids:
+            try:
+                max_batch_time = max(batch_timestamps) if batch_timestamps else None
+                ref_time = datetime.strptime(max_batch_time, "%Y-%m-%d %H:%M:%S") if max_batch_time else None
+                correlated_alerts = evaluate_detection_pipeline(
+                    target_incident_ids=new_incident_ids,
+                    reference_time=ref_time,
+                    db_path=app.config["DATABASE_PATH"]
+                )
+            except Exception as e:
+                print(f"[DetectionPipeline] Warning: Ingestion correlation evaluation error: {e}")
+
+        return jsonify({
+            "status": "success",
+            "batch_id": batch_id,
+            "filename": filename,
+            "source_type": detected_format,
+            "total_records": accepted_count + duplicate_count + rejected_count,
+            "accepted_records": accepted_count,
+            "duplicate_records": duplicate_count,
+            "rejected_records": rejected_count,
+            "correlated_alerts_generated": len(correlated_alerts),
+            "errors": parse_errors[:10],
+            "summary": f"Imported {accepted_count} events from {filename} ({duplicate_count} duplicate(s) skipped, {rejected_count} rejected). Generated {len(correlated_alerts)} correlated detection alert(s)."
+        }), 201
+
+    @app.route("/api/ingestion/batches", methods=["GET"])
+    @login_required
+    def get_ingestion_batches():
+        """Returns list of ingestion batches with pagination and summary statistics."""
+        page = max(1, request.args.get("page", 1, type=int))
+        per_page = min(100, max(1, request.args.get("per_page", 20, type=int)))
+        offset = (page - 1) * per_page
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("SELECT COUNT(*) AS total FROM ingestion_batches")
+        total_batches = c.fetchone()["total"]
+
+        c.execute("""
+            SELECT id, batch_id, filename, source_type, total_records, accepted_records,
+                   rejected_records, duplicate_records, created_username, created_at, status
+            FROM ingestion_batches
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (per_page, offset))
+        batches = [dict(r) for r in c.fetchall()]
+        conn.close()
+
+        total_pages = math.ceil(total_batches / per_page) if total_batches > 0 else 1
+
+        return jsonify({
+            "batches": batches,
+            "total": total_batches,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages
+        }), 200
+
+    @app.route("/api/ingestion/batches/<batch_id>", methods=["GET"])
+    @login_required
+    def get_batch_detail(batch_id: str):
+        """Returns detailed metadata, errors, and associated events for a specific batch."""
+        clean_batch_id = str(batch_id).strip()
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT id, batch_id, filename, source_type, total_records, accepted_records,
+                   rejected_records, duplicate_records, created_username, created_at,
+                   status, errors_json
+            FROM ingestion_batches
+            WHERE batch_id = ?
+        """, (clean_batch_id,))
+        batch_row = c.fetchone()
+        if not batch_row:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Batch '{clean_batch_id}' not found."}), 404
+
+        batch_data = dict(batch_row)
+        try:
+            batch_data["errors"] = json.loads(batch_data.pop("errors_json") or "[]")
+        except Exception:
+            batch_data["errors"] = []
+
+        c.execute("""
+            SELECT id, event_id, event_time, category, attack_type, username, source_ip,
+                   dest_ip, hostname, outcome, severity, risk_score, incident_id
+            FROM security_events
+            WHERE batch_id = ?
+            ORDER BY event_time ASC
+            LIMIT 20
+        """, (clean_batch_id,))
+        batch_data["sample_events"] = [dict(r) for r in c.fetchall()]
+        conn.close()
+
+        return jsonify(batch_data), 200
+
+    @app.route("/api/ingestion/events", methods=["GET"])
+    @login_required
+    def get_security_events():
+        """
+        Paginated Normalized Security Event Explorer endpoint.
+        Supports filtering by source_type, category, outcome, severity, search term,
+        batch_id, date/time ranges, and sorting.
+        """
+        page = max(1, request.args.get("page", 1, type=int))
+        per_page = min(100, max(1, request.args.get("per_page", 20, type=int)))
+        offset = (page - 1) * per_page
+
+        source_type = request.args.get("source_type", "").strip()
+        category = request.args.get("category", "").strip()
+        outcome = request.args.get("outcome", "").strip()
+        severity = request.args.get("severity", "").strip()
+        batch_id = request.args.get("batch_id", "").strip()
+        search = request.args.get("search", "").strip()
+        start_time = request.args.get("start_time", "").strip()
+        end_time = request.args.get("end_time", "").strip()
+
+        sort_by = request.args.get("sort_by", "event_time").strip()
+        sort_dir = request.args.get("sort_dir", "desc").strip().lower()
+        if sort_dir not in ("asc", "desc"):
+            sort_dir = "desc"
+
+        allowed_sort_columns = {
+            "event_time": "event_time",
+            "risk_score": "risk_score",
+            "source_ip": "source_ip",
+            "category": "category",
+            "username": "username",
+            "severity": "severity"
+        }
+        order_col = allowed_sort_columns.get(sort_by, "event_time")
+
+        conditions = []
+        params = []
+
+        if source_type:
+            conditions.append("source_type = ?")
+            params.append(source_type)
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        if outcome:
+            conditions.append("outcome = ?")
+            params.append(outcome)
+        if severity:
+            conditions.append("severity = ?")
+            params.append(severity)
+        if batch_id:
+            conditions.append("batch_id = ?")
+            params.append(batch_id)
+        if start_time:
+            conditions.append("event_time >= ?")
+            params.append(start_time)
+        if end_time:
+            conditions.append("event_time <= ?")
+            params.append(end_time)
+        if search:
+            conditions.append("(username LIKE ? OR source_ip LIKE ? OR dest_ip LIKE ? OR attack_type LIKE ? OR hostname LIKE ?)")
+            pattern = f"%{search}%"
+            params.extend([pattern, pattern, pattern, pattern, pattern])
+
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute(f"SELECT COUNT(*) AS total FROM security_events{where_clause}", params)
+        total_events = c.fetchone()["total"]
+
+        query = f"""
+            SELECT id, event_id, batch_id, source_type, importer, event_time, ingested_at,
+                   category, attack_type, username, source_ip, dest_ip, hostname,
+                   outcome, severity, risk_score, source_record_ref, provenance, incident_id
+            FROM security_events
+            {where_clause}
+            ORDER BY {order_col} {sort_dir}
+            LIMIT ? OFFSET ?
+        """
+        c.execute(query, params + [per_page, offset])
+        events = [dict(r) for r in c.fetchall()]
+        conn.close()
+
+        total_pages = math.ceil(total_events / per_page) if total_events > 0 else 1
+
+        return jsonify({
+            "events": events,
+            "total": total_events,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages
+        }), 200
+
+    @app.route("/api/ingestion/events/<int:event_id>", methods=["GET"])
+    @login_required
+    def get_security_event_detail(event_id: int):
+        """Returns complete normalized security event details with metadata and linked case."""
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT id, event_id, batch_id, source_type, importer, event_time, ingested_at,
+                   category, attack_type, username, source_ip, dest_ip, hostname,
+                   outcome, severity, risk_score, source_record_ref, fingerprint,
+                   provenance, metadata_json, incident_id
+            FROM security_events
+            WHERE id = ?
+        """, (event_id,))
+        evt_row = c.fetchone()
+        if not evt_row:
+            conn.close()
+            return jsonify({"error": "Not Found", "message": f"Security event #{event_id} not found."}), 404
+
+        evt_data = dict(evt_row)
+        try:
+            evt_data["metadata"] = json.loads(evt_data.pop("metadata_json") or "{}")
+        except Exception:
+            evt_data["metadata"] = {}
+
+        if evt_data.get("incident_id"):
+            c.execute("""
+                SELECT incident_id, status, assigned_username, reopen_count, version
+                FROM cases
+                WHERE incident_id = ?
+            """, (evt_data["incident_id"],))
+            case_row = c.fetchone()
+            evt_data["case"] = dict(case_row) if case_row else None
+        else:
+            evt_data["case"] = None
+
+        conn.close()
+        return jsonify(evt_data), 200
+
+    @app.route("/api/ingestion/samples", methods=["GET"])
+    @login_required
+    def get_sample_datasets():
+        """Returns catalog of pre-packaged realistic SOC training datasets."""
+        samples = [
+            {
+                "id": "ssh_bursts",
+                "name": "Linux SSH Brute Force Burst",
+                "filename": "ssh_bursts.log",
+                "format": "linux_ssh",
+                "description": "Rapid authentication failure bursts targeting root, oracle, admin and valid user accounts from external attacker IP.",
+                "mitre_technique": "T1110.001 (Password Guessing)"
+            },
+            {
+                "id": "windows_auth_failures",
+                "name": "Windows Security Event 4625 Telemetry",
+                "filename": "windows_auth_failures.json",
+                "format": "windows_event",
+                "description": "Structured Windows Event Log 4625/4624 records representing logon failures across domain workstations and domain controllers.",
+                "mitre_technique": "T1110.003 (Password Spraying)"
+            },
+            {
+                "id": "zeek_recon_probes",
+                "name": "Zeek Network Reconnaissance & Port Scans",
+                "filename": "zeek_recon_probes.json",
+                "format": "zeek_conn",
+                "description": "Zeek conn.log telemetry demonstrating half-open TCP SYN scanning (S0 states) across common service ports.",
+                "mitre_technique": "T1046 (Network Service Discovery)"
+            },
+            {
+                "id": "canonical_mixed",
+                "name": "Mixed Multi-Vector SOC Incident Telemetry",
+                "filename": "canonical_mixed.csv",
+                "format": "canonical_csv",
+                "description": "Comprehensive CSV dataset including credential stuffing, SQL injection, benign operations, and port reconnaissance.",
+                "mitre_technique": "Multiple ATT&CK Tactics"
+            },
+            {
+                "id": "benign_traffic",
+                "name": "Authorized Benign Operations Baseline",
+                "filename": "benign_traffic.ndjson",
+                "format": "ndjson",
+                "description": "Baseline telemetry representing legitimate corporate workstation logons, SAML authentication assertions, and CI/CD operations.",
+                "mitre_technique": "Baseline (Normal Traffic)"
+            }
+        ]
+        return jsonify({"samples": samples}), 200
+
+    @app.route("/api/ingestion/samples/load", methods=["POST"])
+    @login_required
+    def load_sample_dataset():
+        """Loads a pre-packaged training dataset with one click."""
+        data = request.get_json(silent=True) or {}
+        sample_id = data.get("sample_id", "").strip()
+
+        sample_files = {
+            "ssh_bursts": ("ssh_bursts.log", "linux_ssh"),
+            "windows_auth_failures": ("windows_auth_failures.json", "windows_event"),
+            "zeek_recon_probes": ("zeek_recon_probes.json", "zeek_conn"),
+            "canonical_mixed": ("canonical_mixed.csv", "canonical_csv"),
+            "benign_traffic": ("benign_traffic.ndjson", "ndjson")
+        }
+
+        if sample_id not in sample_files:
+            return jsonify({"error": "Bad Request", "message": f"Unknown sample dataset '{sample_id}'. Available: {list(sample_files.keys())}"}), 400
+
+        fname, fmt = sample_files[sample_id]
+        sample_path = Path(__file__).resolve().parent / "samples" / fname
+        if not sample_path.exists():
+            return jsonify({"error": "Not Found", "message": f"Sample dataset file '{fname}' not found on server."}), 404
+
+        try:
+            content = sample_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return jsonify({"error": "Internal Server Error", "message": f"Failed to read sample dataset: {str(e)}"}), 500
+
+        records, parse_errors, detected_format = IngestionParser.parse_content(content, format_name=fmt, filename=fname)
+        if not records:
+            return jsonify({"error": "Bad Request", "message": "Failed to parse sample records.", "errors": parse_errors}), 400
+
+        user_id = session.get("user_id")
+        username = session.get("username", "admin")
+        batch_id = f"bch_{uuid.uuid4().hex[:12]}"
+        now_dt = datetime.now()
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+
+        accepted_count = 0
+        duplicate_count = 0
+        rejected_count = len(parse_errors)
+        new_incident_ids = []
+        batch_timestamps = []
+
+        try:
+            c.execute("""
+                INSERT INTO ingestion_batches (
+                    batch_id, filename, source_type, total_records, accepted_records,
+                    rejected_records, duplicate_records, created_by, created_username,
+                    created_at, status, errors_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                batch_id, fname, detected_format, len(records) + len(parse_errors),
+                0, rejected_count, 0, user_id, username, now_str, "completed",
+                json.dumps(parse_errors[:50])
+            ))
+
+            for rec in records:
+                evt_time = rec["event_time"]
+                batch_timestamps.append(evt_time)
+                src_ip = rec["source_ip"]
+                dest_ip = rec.get("dest_ip")
+                uname = rec.get("username") or "unknown"
+                atk = rec["attack_type"]
+                outcome = rec["outcome"]
+                category = rec.get("category", "Authentication")
+                hostname = rec.get("hostname", "sec-host")
+                severity = rec.get("severity", "medium")
+                risk = rec.get("risk_score", 50)
+                behavior = rec.get("behavior", f"{atk} observed")
+                src_ref = rec.get("source_record_ref", "")
+                metadata_str = json.dumps(rec.get("metadata", {}))
+
+                fingerprint = calculate_fingerprint(
+                    detected_format, evt_time, src_ip, dest_ip, uname, atk, outcome
+                )
+
+                c.execute("SELECT id FROM security_events WHERE fingerprint = ?", (fingerprint,))
+                if c.fetchone():
+                    duplicate_count += 1
+                    continue
+
+                event_id = f"evt_{uuid.uuid4().hex[:12]}"
+
+                c.execute("""
+                    INSERT INTO logs (
+                        time, ip, attack, risk, behavior, location, resolved, username, is_simulated, provenance
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, 'imported_unverified')
+                """, (
+                    evt_time, src_ip, atk, risk, behavior, hostname, uname
+                ))
+                log_id = c.lastrowid
+                new_incident_ids.append(log_id)
+
+                c.execute("""
+                    INSERT INTO cases (
+                        incident_id, status, reopen_count, version, created_at, updated_at
+                    ) VALUES (?, 'new', 0, 1, ?, ?)
+                """, (log_id, now_str, now_str))
+
+                c.execute("""
+                    INSERT INTO security_events (
+                        event_id, batch_id, source_type, importer, event_time, ingested_at,
+                        category, attack_type, username, source_ip, dest_ip, hostname,
+                        outcome, severity, risk_score, source_record_ref, fingerprint,
+                        provenance, metadata_json, incident_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported_unverified', ?, ?)
+                """, (
+                    event_id, batch_id, detected_format, username, evt_time, now_str,
+                    category, atk, uname, src_ip, dest_ip, hostname,
+                    outcome, severity, risk, src_ref, fingerprint, metadata_str, log_id
+                ))
+
+                accepted_count += 1
+
+            c.execute("""
+                UPDATE ingestion_batches
+                SET accepted_records = ?, duplicate_records = ?, status = 'completed'
+                WHERE batch_id = ?
+            """, (accepted_count, duplicate_count, batch_id))
+
+            c.execute("""
+                INSERT INTO system_audit_log (
+                    actor_id, actor_username, action, target, reason, details, created_at
+                ) VALUES (?, ?, 'load_sample_dataset', ?, ?, ?, ?)
+            """, (
+                user_id, username, f"sample:{sample_id}",
+                f"Loaded training dataset '{sample_id}' ({accepted_count} records)",
+                json.dumps({"sample_id": sample_id, "batch_id": batch_id, "accepted": accepted_count}),
+                now_str
+            ))
+
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            return jsonify({"error": "Internal Server Error", "message": f"Failed to persist sample batch: {str(e)}"}), 500
+
+        conn.close()
+
+        # Trigger detection evaluation
+        correlated_alerts = []
+        if new_incident_ids:
+            try:
+                max_batch_time = max(batch_timestamps) if batch_timestamps else None
+                ref_time = datetime.strptime(max_batch_time, "%Y-%m-%d %H:%M:%S") if max_batch_time else None
+                correlated_alerts = evaluate_detection_pipeline(
+                    target_incident_ids=new_incident_ids,
+                    reference_time=ref_time,
+                    db_path=app.config["DATABASE_PATH"]
+                )
+            except Exception as e:
+                print(f"[DetectionPipeline] Warning: Sample correlation evaluation error: {e}")
+
+        return jsonify({
+            "status": "success",
+            "sample_id": sample_id,
+            "batch_id": batch_id,
+            "accepted_records": accepted_count,
+            "duplicate_records": duplicate_count,
+            "correlated_alerts_generated": len(correlated_alerts),
+            "message": f"Loaded training dataset '{sample_id}' successfully. {accepted_count} event(s) imported, {len(correlated_alerts)} correlated detection alert(s) generated."
+        }), 201
+
+    @app.route("/api/ingestion/export", methods=["GET"])
+    @login_required
+    def export_security_events_csv():
+        """
+        Exports filtered security events to CSV format with formula injection protection.
+        Prepend single quote to values starting with =, +, -, @, \\t, \\r.
+        """
+        source_type = request.args.get("source_type", "").strip()
+        category = request.args.get("category", "").strip()
+        outcome = request.args.get("outcome", "").strip()
+        batch_id = request.args.get("batch_id", "").strip()
+
+        conditions = []
+        params = []
+        if source_type:
+            conditions.append("source_type = ?")
+            params.append(source_type)
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        if outcome:
+            conditions.append("outcome = ?")
+            params.append(outcome)
+        if batch_id:
+            conditions.append("batch_id = ?")
+            params.append(batch_id)
+
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+        conn = get_db_connection(app.config["DATABASE_PATH"])
+        c = conn.cursor()
+        c.execute(f"""
+            SELECT event_id, event_time, source_type, category, attack_type, username,
+                   source_ip, dest_ip, hostname, outcome, severity, risk_score, provenance
+            FROM security_events
+            {where_clause}
+            ORDER BY event_time DESC
+            LIMIT 5000
+        """, params)
+        rows = c.fetchall()
+        conn.close()
+
+        output = io.StringIO()
+        fieldnames = [
+            "event_id", "event_time", "source_type", "category", "attack_type",
+            "username", "source_ip", "dest_ip", "hostname", "outcome",
+            "severity", "risk_score", "provenance"
+        ]
+        writer = csv.writer(output)
+        writer.writerow(fieldnames)
+
+        for row in rows:
+            sanitized_row = [sanitize_csv_formula(row[col]) for col in fieldnames]
+            writer.writerow(sanitized_row)
+
+        csv_content = output.getvalue()
+        from flask import Response
+        return Response(
+            csv_content,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=security_events_export.csv"}
+        )
 
     # ---------------------------------------------------------
     # Metrics Endpoint

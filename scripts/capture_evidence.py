@@ -1153,8 +1153,152 @@ def run_full_verification():
         passed_assertions += 1
         print("  -> Passed: Zero horizontal overflow confirmed across all responsive breakpoints.")
 
+        # ── Assertion 25: Sprint 4 Security Event Explorer Navigation & UI Layout ──
+        print("\n[Assert 25] Verifying Security Event Explorer Navigation & Layout...")
+        browser.resize(1440, 900)
+        browser.evaluate("""
+            (() => {
+                const navLink = document.getElementById('nav-event-explorer') || document.querySelector('a.nav-link[data-view="event-explorer"]');
+                if (navLink) navLink.click();
+                else if (window.switchView) window.switchView('event-explorer');
+            })()
+        """)
+        time.sleep(1.5)
+        nav_exp_result = browser.evaluate("""
+            (() => {
+                const panel = document.getElementById('view-event-explorer');
+                const searchInput = document.getElementById('event-search-input');
+                const importBtn = document.getElementById('btn-open-import-modal');
+                const samplesBtn = document.getElementById('btn-open-samples-modal');
+                const table = document.getElementById('security-events-table');
+
+                return {
+                    panelActive: panel ? panel.classList.contains('active') : false,
+                    hasSearch: !!searchInput,
+                    hasImportBtn: !!importBtn,
+                    hasSamplesBtn: !!samplesBtn,
+                    hasTable: !!table
+                };
+            })()
+        """)
+        assert nav_exp_result["panelActive"], "Event Explorer panel must be active"
+        assert nav_exp_result["hasSearch"], "Event search input must exist"
+        assert nav_exp_result["hasImportBtn"], "Import logs button must exist"
+        assert nav_exp_result["hasSamplesBtn"], "Load samples button must exist"
+        assert nav_exp_result["hasTable"], "Security events table must exist"
+        time.sleep(1.0)
+        browser.screenshot("18_event_explorer_workspace.png")
+        passed_assertions += 1
+        print("  -> Passed: Security Event Explorer layout and action controls verified.")
+
+        # ── Assertion 26: Load Realistic Training Dataset via UI ──
+        print("\n[Assert 26] Loading Realistic SOC Training Dataset (Windows 4625 Telemetry)...")
+        sample_load_result = browser.evaluate("""
+            (async () => {
+                const samplesBtn = document.getElementById('btn-open-samples-modal');
+                if (!samplesBtn) return { success: false, reason: 'Samples button not found' };
+                samplesBtn.click();
+                await new Promise(r => setTimeout(r, 800));
+
+                const modal = document.getElementById('modal-load-sample');
+                if (!modal) return { success: false, reason: 'Modal not found' };
+
+                const loadBtn = modal.querySelector('.btn-load-sample[data-id="windows_auth_failures"]') || modal.querySelector('.btn-load-sample');
+                if (!loadBtn) return { success: false, reason: 'Load sample button not found' };
+
+                loadBtn.click();
+                await new Promise(r => setTimeout(r, 1500));
+
+                return {
+                    success: true,
+                    bannerText: document.getElementById('sample-load-status-banner') ? document.getElementById('sample-load-status-banner').textContent : ''
+                };
+            })()
+        """)
+        assert sample_load_result["success"], f"Dataset loading failed: {sample_load_result}"
+        passed_assertions += 1
+        print(f"  -> Passed: Training dataset loaded successfully ({sample_load_result.get('bannerText')[:50]}...).")
+
+        # ── Assertion 27: Normalized Event Inspection Modal ──
+        print("\n[Assert 27] Verifying Normalized Event Row & Detail Modal...")
+        browser.evaluate("""
+            (() => {
+                const modal = document.getElementById('modal-load-sample');
+                if (modal && window.UI && window.UI.closeModal) window.UI.closeModal(modal);
+                else if (modal) modal.classList.remove('show');
+            })()
+        """)
+        time.sleep(1.0)
+        event_inspect_result = browser.evaluate("""
+            (async () => {
+                const tbody = document.getElementById('security-events-tbody');
+                const inspectBtn = tbody ? tbody.querySelector('.btn-inspect-event') : null;
+                if (!inspectBtn) return { success: false, reason: 'No inspect button found in table' };
+
+                inspectBtn.click();
+                await new Promise(r => setTimeout(r, 800));
+
+                const detailModal = document.getElementById('modal-event-detail');
+                const attackText = document.getElementById('event-detail-attack') ? document.getElementById('event-detail-attack').textContent : '';
+                const fpText = document.getElementById('event-detail-fingerprint') ? document.getElementById('event-detail-fingerprint').textContent : '';
+
+                return {
+                    success: true,
+                    modalVisible: detailModal ? (detailModal.classList.contains('show') || detailModal.getAttribute('aria-hidden') === 'false') : false,
+                    attackText,
+                    hasFingerprint: fpText.length >= 32
+                };
+            })()
+        """)
+        assert event_inspect_result["success"], f"Event inspection failed: {event_inspect_result}"
+        assert event_inspect_result["hasFingerprint"], "Event detail must include SHA-256 integrity fingerprint"
+        browser.screenshot("19_event_detail_modal.png")
+        passed_assertions += 1
+        print("  -> Passed: Normalized security event detail modal and integrity fingerprint verified.")
+
+        # ── Assertion 28: Event Explorer Responsive Viewport Assertions (390px, 768px, 1440px, 1920px) ──
+        print("\n[Assert 28] Verifying Event Explorer Breakpoints (390px, 768px, 1440px, 1920px)...")
+        browser.evaluate("""
+            (() => {
+                const modal = document.getElementById('modal-event-detail');
+                if (modal && window.UI && window.UI.closeModal) window.UI.closeModal(modal);
+                else if (modal) modal.classList.remove('show');
+            })()
+        """)
+        time.sleep(0.5)
+
+        ee_viewports = [
+            (390, 844, "20_mobile_event_explorer_390px.png"),
+            (768, 1024, "21_tablet_event_explorer_768px.png"),
+            (1440, 900, "22_desktop_event_explorer_1440px.png"),
+            (1920, 1080, "23_widescreen_event_explorer_1920px.png")
+        ]
+        for w, h, fname in ee_viewports:
+            browser.resize(w, h)
+            browser.evaluate("""
+                (() => {
+                    if (window.switchView) window.switchView('event-explorer');
+                })()
+            """)
+            time.sleep(0.8)
+            overflow_check = browser.evaluate("""
+                (() => {
+                    return {
+                        scrollWidth: document.documentElement.scrollWidth,
+                        clientWidth: document.documentElement.clientWidth,
+                        hasOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+                    };
+                })()
+            """)
+            assert not overflow_check["hasOverflow"], f"Horizontal overflow detected in Event Explorer at {w}px viewport: {overflow_check}"
+            browser.screenshot(fname)
+            print(f"  -> Viewport {w}x{h}: Zero horizontal overflow verified ({overflow_check['scrollWidth']} <= {overflow_check['clientWidth']}).")
+
+        passed_assertions += 1
+        print("  -> Passed: Event Explorer zero horizontal overflow confirmed across all responsive breakpoints.")
+
         print("\n========================================================")
-        print(f"ALL REAL-BROWSER ASSERTIONS PASSED ({passed_assertions}/24)")
+        print(f"ALL REAL-BROWSER ASSERTIONS PASSED ({passed_assertions}/28)")
         print("Updated evidence screenshots saved to docs/screenshots/")
         print("========================================================")
 

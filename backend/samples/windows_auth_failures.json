@@ -1,0 +1,96 @@
+[
+  {
+    "Event": {
+      "System": {
+        "Provider": {"@Name": "Microsoft-Windows-Security-Auditing"},
+        "EventID": 4625,
+        "Version": 2,
+        "Level": 0,
+        "Task": 12544,
+        "Opcode": 0,
+        "TimeCreated": {"@SystemTime": "2026-10-31T08:30:10.000Z"},
+        "Computer": "DC01.corp.internal"
+      },
+      "EventData": {
+        "TargetUserName": "Administrator",
+        "TargetDomainName": "CORP",
+        "Status": "0xC000006D",
+        "SubStatus": "0xC000006A",
+        "FailureReason": "Unknown user name or bad password",
+        "LogonType": "3",
+        "WorkstationName": "ATTACK-BOX",
+        "IpAddress": "198.51.100.101"
+      }
+    }
+  },
+  {
+    "Event": {
+      "System": {
+        "Provider": {"@Name": "Microsoft-Windows-Security-Auditing"},
+        "EventID": 4625,
+        "Version": 2,
+        "Level": 0,
+        "Task": 12544,
+        "Opcode": 0,
+        "TimeCreated": {"@SystemTime": "2026-10-31T08:30:15.000Z"},
+        "Computer": "DC01.corp.internal"
+      },
+      "EventData": {
+        "TargetUserName": "svc_backup",
+        "TargetDomainName": "CORP",
+        "Status": "0xC000006D",
+        "SubStatus": "0xC000006A",
+        "FailureReason": "Unknown user name or bad password",
+        "LogonType": "3",
+        "WorkstationName": "ATTACK-BOX",
+        "IpAddress": "198.51.100.101"
+      }
+    }
+  },
+  {
+    "Event": {
+      "System": {
+        "Provider": {"@Name": "Microsoft-Windows-Security-Auditing"},
+        "EventID": 4625,
+        "Version": 2,
+        "Level": 0,
+        "Task": 12544,
+        "Opcode": 0,
+        "TimeCreated": {"@SystemTime": "2026-10-31T08:30:20.000Z"},
+        "Computer": "DC01.corp.internal"
+      },
+      "EventData": {
+        "TargetUserName": "finance_mgr",
+        "TargetDomainName": "CORP",
+        "Status": "0xC000006D",
+        "SubStatus": "0xC000006A",
+        "FailureReason": "Unknown user name or bad password",
+        "LogonType": "3",
+        "WorkstationName": "ATTACK-BOX",
+        "IpAddress": "198.51.100.101"
+      }
+    }
+  },
+  {
+    "Event": {
+      "System": {
+        "Provider": {"@Name": "Microsoft-Windows-Security-Auditing"},
+        "EventID": 4624,
+        "Version": 2,
+        "Level": 0,
+        "Task": 12544,
+        "Opcode": 0,
+        "TimeCreated": {"@SystemTime": "2026-10-31T08:32:00.000Z"},
+        "Computer": "DC01.corp.internal"
+      },
+      "EventData": {
+        "TargetUserName": "admin_mannan",
+        "TargetDomainName": "CORP",
+        "LogonType": "2",
+        "WorkstationName": "ADMIN-LAPTOP",
+        "IpAddress": "10.0.0.42"
+      }
+    }
+  }
+]
+

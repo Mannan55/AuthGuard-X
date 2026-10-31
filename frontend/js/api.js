@@ -349,6 +349,70 @@
           body: JSON.stringify({ preset })
         });
       }
+    },
+    ingestion: {
+      async importLogs(payload, isFormData = false) {
+        if (isFormData) {
+          const csrf = await getCsrfToken();
+          const headers = { 'Accept': 'application/json' };
+          if (csrf) headers['X-CSRFToken'] = csrf;
+          const res = await fetch('/api/ingestion/import', {
+            method: 'POST',
+            body: payload,
+            headers,
+            credentials: 'same-origin'
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.message || data.error || `HTTP ${res.status}`);
+          }
+          return data;
+        }
+        return apiFetch('/api/ingestion/import', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      },
+      async getBatches(params = {}) {
+        const query = new URLSearchParams(params);
+        const qs = query.toString();
+        return apiFetch(`/api/ingestion/batches${qs ? `?${qs}` : ''}`);
+      },
+      async getBatch(batchId) {
+        return apiFetch(`/api/ingestion/batches/${encodeURIComponent(batchId)}`);
+      },
+      async getEvents(params = {}) {
+        const query = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && v !== '' && v !== 'all') {
+            query.append(k, v);
+          }
+        });
+        const qs = query.toString();
+        return apiFetch(`/api/ingestion/events${qs ? `?${qs}` : ''}`);
+      },
+      async getEvent(eventId) {
+        return apiFetch(`/api/ingestion/events/${encodeURIComponent(eventId)}`);
+      },
+      async getSamples() {
+        return apiFetch('/api/ingestion/samples');
+      },
+      async loadSample(sampleId) {
+        return apiFetch('/api/ingestion/samples/load', {
+          method: 'POST',
+          body: JSON.stringify({ sample_id: sampleId })
+        });
+      },
+      getExportUrl(params = {}) {
+        const query = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null && v !== '' && v !== 'all') {
+            query.append(k, v);
+          }
+        });
+        const qs = query.toString();
+        return `/api/ingestion/export${qs ? `?${qs}` : ''}`;
+      }
     }
   };
 

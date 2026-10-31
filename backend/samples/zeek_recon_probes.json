@@ -1,0 +1,9 @@
+[
+  {"ts": 1793433600.12, "id.orig_h": "203.0.113.77", "id.orig_p": 49100, "id.resp_h": "10.0.0.10", "id.resp_p": 22, "proto": "tcp", "service": "ssh", "conn_state": "S0", "history": "S", "orig_bytes": 0, "resp_bytes": 0},
+  {"ts": 1793433600.35, "id.orig_h": "203.0.113.77", "id.orig_p": 49101, "id.resp_h": "10.0.0.10", "id.resp_p": 80, "proto": "tcp", "service": "http", "conn_state": "S0", "history": "S", "orig_bytes": 0, "resp_bytes": 0},
+  {"ts": 1793433600.58, "id.orig_h": "203.0.113.77", "id.orig_p": 49102, "id.resp_h": "10.0.0.10", "id.resp_p": 443, "proto": "tcp", "service": "ssl", "conn_state": "S0", "history": "S", "orig_bytes": 0, "resp_bytes": 0},
+  {"ts": 1793433600.82, "id.orig_h": "203.0.113.77", "id.orig_p": 49103, "id.resp_h": "10.0.0.10", "id.resp_p": 3389, "proto": "tcp", "service": "rdp", "conn_state": "REJ", "history": "Sr", "orig_bytes": 0, "resp_bytes": 0},
+  {"ts": 1793433601.05, "id.orig_h": "203.0.113.77", "id.orig_p": 49104, "id.resp_h": "10.0.0.10", "id.resp_p": 8080, "proto": "tcp", "service": "-", "conn_state": "S0", "history": "S", "orig_bytes": 0, "resp_bytes": 0},
+  {"ts": 1793433615.00, "id.orig_h": "10.0.0.50", "id.orig_p": 51222, "id.resp_h": "10.0.0.10", "id.resp_p": 443, "proto": "tcp", "service": "ssl", "conn_state": "SF", "history": "ShADadFf", "orig_bytes": 1420, "resp_bytes": 5320}
+]
+

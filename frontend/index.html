@@ -136,6 +136,15 @@
           <span class="nav-label">Detection Rules</span>
         </a>
 
+        <a id="nav-event-explorer" href="#event-explorer" class="nav-link" data-view="event-explorer">
+          <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <span class="nav-label">Event Explorer</span>
+        </a>
+
         <a id="nav-simulations" href="#simulations" class="nav-link" data-view="simulations">
           <svg class="nav-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
@@ -1204,6 +1213,159 @@
           </div>
         </section>
 
+        <!-- Sprint 4: Security Event Explorer & Log Ingestion -->
+        <section id="view-event-explorer" class="view-panel">
+          <div class="page-header" style="margin-bottom: var(--space-4);">
+            <div>
+              <h2 class="page-title">Security Event Explorer</h2>
+              <p class="page-subtitle text-muted">Inspect normalized multi-format security logs, load realistic training datasets, and analyze telemetry.</p>
+            </div>
+            <div class="page-actions" style="display: flex; gap: var(--space-2); flex-wrap: wrap;">
+              <button id="btn-open-samples-modal" class="btn btn-secondary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                </svg>
+                Load Training Dataset
+              </button>
+              <button id="btn-open-import-modal" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                Import Security Logs
+              </button>
+              <button id="btn-export-events-csv" class="btn btn-secondary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Export CSV
+              </button>
+            </div>
+          </div>
+
+          <!-- Summary Stats Cards -->
+          <div class="metrics-grid" style="margin-bottom: var(--space-4);">
+            <div class="metric-card">
+              <span class="metric-label">Total Ingested Events</span>
+              <div class="metric-value" id="stat-total-events">—</div>
+              <span class="metric-caption text-muted">Across all imported sources</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Ingestion Batches</span>
+              <div class="metric-value" id="stat-total-batches">—</div>
+              <span class="metric-caption text-muted">Completed import jobs</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Failed / Blocked Events</span>
+              <div class="metric-value" id="stat-failed-outcomes" style="color: var(--color-danger);">—</div>
+              <span class="metric-caption text-muted">Suspicious logon / recon probes</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Unique Threat Sources</span>
+              <div class="metric-value" id="stat-threat-ips" style="color: var(--color-warning);">—</div>
+              <span class="metric-caption text-muted">Distinct source IP addresses</span>
+            </div>
+          </div>
+
+          <!-- Event Filters Card -->
+          <div class="card" style="margin-bottom: var(--space-4);">
+            <div class="card-body" style="padding: var(--space-3);">
+              <div class="filter-bar" style="display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center;">
+                <div style="flex: 1 1 200px;">
+                  <input type="text" id="event-search-input" class="form-input" placeholder="Search IP, username, attack, host..." style="width: 100%;">
+                </div>
+                <div style="flex: 0 1 160px;">
+                  <select id="event-source-filter" class="form-select" style="width: 100%;">
+                    <option value="all">All Sources</option>
+                    <option value="canonical_csv">Canonical CSV</option>
+                    <option value="ndjson">NDJSON</option>
+                    <option value="windows_event">Windows Event</option>
+                    <option value="linux_ssh">Linux SSH</option>
+                    <option value="zeek_conn">Zeek Conn</option>
+                  </select>
+                </div>
+                <div style="flex: 0 1 160px;">
+                  <select id="event-category-filter" class="form-select" style="width: 100%;">
+                    <option value="all">All Categories</option>
+                    <option value="Authentication">Authentication</option>
+                    <option value="Network Connection">Network Connection</option>
+                    <option value="Web Attack">Web Attack</option>
+                    <option value="Reconnaissance">Reconnaissance</option>
+                  </select>
+                </div>
+                <div style="flex: 0 1 140px;">
+                  <select id="event-outcome-filter" class="form-select" style="width: 100%;">
+                    <option value="all">All Outcomes</option>
+                    <option value="success">Success</option>
+                    <option value="failure">Failure</option>
+                    <option value="blocked">Blocked</option>
+                  </select>
+                </div>
+                <div style="flex: 0 1 140px;">
+                  <select id="event-severity-filter" class="form-select" style="width: 100%;">
+                    <option value="all">All Severities</option>
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                    <option value="info">Info</option>
+                  </select>
+                </div>
+                <button id="btn-reset-event-filters" class="btn btn-secondary">Reset</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Events Table Card -->
+          <div class="card">
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+              <h3 class="card-title">Normalized Security Events</h3>
+              <div class="text-muted" style="font-size: var(--text-xs);" id="events-count-label">Loading events...</div>
+            </div>
+            <div class="table-container">
+              <table class="data-table" id="security-events-table">
+                <thead>
+                  <tr>
+                    <th>Event Time (UTC)</th>
+                    <th>Source Type</th>
+                    <th>Attack / Category</th>
+                    <th>Target User</th>
+                    <th>Source IP</th>
+                    <th>Destination IP</th>
+                    <th>Outcome</th>
+                    <th>Risk</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="security-events-tbody">
+                  <tr>
+                    <td colspan="9" class="text-center text-muted" style="padding: var(--space-6);">Loading security events...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card-footer" style="display: flex; justify-content: space-between; align-items: center; padding: var(--space-3);">
+              <div style="display: flex; align-items: center; gap: var(--space-2);">
+                <span class="text-muted" style="font-size: var(--text-xs);">Per page:</span>
+                <select id="event-per-page" class="form-select" style="padding: 2px 8px; font-size: var(--text-xs); width: 70px;">
+                  <option value="20">20</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                </select>
+              </div>
+              <div style="display: flex; align-items: center; gap: var(--space-2);">
+                <button id="event-prev-page" class="btn btn-secondary btn-sm" disabled>&larr; Previous</button>
+                <span id="event-page-info" class="text-muted" style="font-size: var(--text-xs);">Page 1 of 1</span>
+                <button id="event-next-page" class="btn btn-secondary btn-sm" disabled>Next &rarr;</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
       </div>
     </main>
   </div>
@@ -1545,6 +1707,149 @@
     </div>
   </div>
 
+  <!-- Sprint 4: Security Log Import Modal -->
+  <div id="modal-log-import" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3 class="modal-title">Import Security Logs</h3>
+          <span class="text-muted text-xs">Normalize structured telemetry into canonical security events</span>
+        </div>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+        <div id="import-result-banner" style="display: none; margin-bottom: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md);"></div>
+
+        <div class="form-group" style="margin-bottom: var(--space-3);">
+          <label for="import-format-select" class="form-label">Log Format</label>
+          <select id="import-format-select" class="form-select">
+            <option value="auto">Auto-Detect Format</option>
+            <option value="canonical_csv">Canonical CSV (Comma-Separated Values)</option>
+            <option value="ndjson">NDJSON (Newline-Delimited JSON)</option>
+            <option value="windows_event">Windows Security Event Log (JSON / 4624 &amp; 4625)</option>
+            <option value="linux_ssh">Linux SSH Auth Log (Syslog format)</option>
+            <option value="zeek_conn">Zeek Connection Log (JSON conn.log)</option>
+          </select>
+        </div>
+
+        <div class="form-group" style="margin-bottom: var(--space-3);">
+          <label class="form-label">Upload Log File (Max 5 MB)</label>
+          <div id="import-drop-zone" class="card" style="border: 2px dashed var(--color-border); padding: var(--space-4); text-align: center; cursor: pointer; transition: border-color var(--transition-fast);">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom: var(--space-2); color: var(--color-text-secondary);">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <div style="font-size: var(--text-sm); color: var(--color-text-primary);">Click to select or drag and drop log file</div>
+            <div class="text-muted text-xs" style="margin-top: 4px;">Supports .csv, .json, .ndjson, .log, .txt</div>
+            <input type="file" id="import-file-input" style="display: none;" accept=".csv,.json,.ndjson,.log,.txt">
+            <div id="import-selected-filename" class="text-primary font-mono text-xs" style="margin-top: var(--space-2); display: none;"></div>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: var(--space-3);">
+          <label for="import-text-content" class="form-label">Or Paste Log Telemetry Data</label>
+          <textarea id="import-text-content" class="form-input font-mono text-xs" rows="6" placeholder="Paste CSV records, syslog lines, or JSON objects directly here..."></textarea>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2);">
+          <input type="checkbox" id="import-dry-run-checkbox" style="cursor: pointer;">
+          <label for="import-dry-run-checkbox" style="font-size: var(--text-sm); cursor: pointer; user-select: none;">
+            Dry Run (Validate &amp; preview without saving to database)
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+        <button id="btn-execute-import" class="btn btn-primary">
+          <span class="btn-text">Import &amp; Normalize Telemetry</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sprint 4: Load Training Datasets Modal -->
+  <div id="modal-load-sample" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3 class="modal-title">Realistic SOC Training Datasets</h3>
+          <span class="text-muted text-xs">Load pre-packaged synthetic telemetry for hands-on investigation and detection drills</span>
+        </div>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+        <div id="sample-load-status-banner" style="display: none; margin-bottom: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md);"></div>
+        <div class="dataset-grid" style="display: flex; flex-direction: column; gap: var(--space-3);" id="samples-dataset-list">
+          <!-- Dynamically populated cards -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sprint 4: Security Event Detail Modal -->
+  <div id="modal-event-detail" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3 class="modal-title">Security Event Detail <span id="event-detail-id" class="text-cyan font-mono">#—</span></h3>
+          <span id="event-detail-time" class="text-muted text-xs">—</span>
+        </div>
+        <button class="modal-close-btn" data-dismiss="modal" aria-label="Close dialog">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+        <div class="grid-2-col" style="gap: var(--space-3); margin-bottom: var(--space-4);">
+          <div class="card" style="padding: var(--space-3);">
+            <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Classification &amp; Source</div>
+            <div style="margin-top: 4px;"><strong>Attack:</strong> <span id="event-detail-attack" class="text-primary">—</span></div>
+            <div style="margin-top: 4px;"><strong>Category:</strong> <span id="event-detail-category">—</span></div>
+            <div style="margin-top: 4px;"><strong>Source Format:</strong> <span id="event-detail-source-type" class="badge">—</span></div>
+            <div style="margin-top: 4px;"><strong>Provenance:</strong> <span id="event-detail-provenance" class="badge">—</span></div>
+          </div>
+          <div class="card" style="padding: var(--space-3);">
+            <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Endpoint &amp; Identity</div>
+            <div style="margin-top: 4px;"><strong>Target User:</strong> <span id="event-detail-user" class="font-mono text-primary">—</span></div>
+            <div style="margin-top: 4px;"><strong>Source IP:</strong> <span id="event-detail-ip" class="font-mono">—</span></div>
+            <div style="margin-top: 4px;"><strong>Destination IP:</strong> <span id="event-detail-dest-ip" class="font-mono">—</span></div>
+            <div style="margin-top: 4px;"><strong>Host:</strong> <span id="event-detail-host" class="font-mono">—</span></div>
+          </div>
+        </div>
+
+        <div class="card" style="padding: var(--space-3); margin-bottom: var(--space-4);">
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Outcome &amp; Risk Assessment</div>
+          <div style="display: flex; gap: var(--space-3); align-items: center; margin-top: 4px;">
+            <div>Outcome: <span id="event-detail-outcome" class="badge">—</span></div>
+            <div>Severity: <span id="event-detail-severity" class="badge">—</span></div>
+            <div>Risk Score: <strong id="event-detail-risk">—</strong>/100</div>
+          </div>
+          <div style="margin-top: var(--space-2); font-size: var(--text-xs); color: var(--color-text-secondary);">
+            <strong>Behavior:</strong> <span id="event-detail-behavior">—</span>
+          </div>
+        </div>
+
+        <div class="card" style="padding: var(--space-3); margin-bottom: var(--space-4);">
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Integrity Fingerprint (SHA-256)</div>
+          <div id="event-detail-fingerprint" class="font-mono text-xs text-muted" style="word-break: break-all;">—</div>
+        </div>
+
+        <div>
+          <div class="text-muted text-xs uppercase" style="margin-bottom: var(--space-1);">Raw Telemetry Metadata</div>
+          <pre id="event-detail-raw-metadata" class="card font-mono text-xs" style="padding: var(--space-3); background: var(--color-surface); max-height: 180px; overflow-y: auto; color: var(--color-text-secondary);"></pre>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <div id="event-investigation-action"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Non-intrusive Toast Container -->
   <div id="toast-container" class="toast-shelf" aria-live="polite"></div>
 
@@ -1559,6 +1864,7 @@
   <script src="js/incidents.js"></script>
   <script src="js/investigation.js"></script>
   <script src="js/detection.js"></script>
+  <script src="js/ingestion.js"></script>
 
   <script>
     // ── Single Page View Router ──────────────────────────────────────
@@ -1585,6 +1891,7 @@
         'investigation': 'Incident Investigation Workspace',
         'detection-alerts': 'Detection Alerts Workspace',
         'detection-rules': 'Detection Rule Management',
+        'event-explorer': 'Security Event Explorer & Ingestion',
         'simulations': 'Attack Simulation Engine',
         'threat-map': 'Global Telemetry Vectors'
       };
@@ -1601,6 +1908,9 @@
       }
       if (baseView === 'detection-rules' && window.Detection && typeof window.Detection.loadRules === 'function') {
         window.Detection.loadRules();
+      }
+      if (baseView === 'event-explorer' && window.Ingestion && typeof window.Ingestion.refresh === 'function') {
+        window.Ingestion.refresh();
       }
     }
 

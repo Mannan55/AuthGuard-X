@@ -352,7 +352,8 @@
   flex-wrap:   wrap;
 }
 
-.table-container {
+.table-container,
+.table-responsive {
   width:         100%;
   overflow-x:    auto;
   border-radius: var(--radius-lg);

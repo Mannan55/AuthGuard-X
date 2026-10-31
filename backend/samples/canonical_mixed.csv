@@ -1,0 +1,14 @@
+timestamp,source_ip,dest_ip,attack,category,username,hostname,outcome,risk,behavior
+2026-10-31 08:00:01,198.51.100.45,10.0.0.5,SSH Brute Force,Authentication,root,auth-srv-01,failure,85,Failed password for root from port 41201
+2026-10-31 08:00:05,198.51.100.45,10.0.0.5,SSH Brute Force,Authentication,admin,auth-srv-01,failure,85,Failed password for admin from port 41202
+2026-10-31 08:00:10,198.51.100.45,10.0.0.5,SSH Brute Force,Authentication,ubuntu,auth-srv-01,failure,85,Failed password for ubuntu from port 41203
+2026-10-31 08:00:15,198.51.100.45,10.0.0.5,SSH Brute Force,Authentication,operator,auth-srv-01,failure,85,Failed password for operator from port 41204
+2026-10-31 08:00:20,198.51.100.45,10.0.0.5,SSH Brute Force,Authentication,deploy,auth-srv-01,failure,85,Failed password for deploy from port 41205
+2026-10-31 08:01:00,203.0.113.19,10.0.0.8,Credential Stuffing,Authentication,sarah.connor,web-app-02,failure,80,Repeated rapid authentication failure with leaked credential hash
+2026-10-31 08:01:02,203.0.113.19,10.0.0.8,Credential Stuffing,Authentication,john.doe,web-app-02,failure,80,Repeated rapid authentication failure with leaked credential hash
+2026-10-31 08:01:04,203.0.113.19,10.0.0.8,Credential Stuffing,Authentication,alex.mercer,web-app-02,failure,80,Repeated rapid authentication failure with leaked credential hash
+2026-10-31 08:02:15,192.168.1.105,10.0.0.12,SQL Injection,Web Attack,analyst_app,db-edge-01,blocked,90,SELECT * FROM users WHERE '1'='1' UNION SELECT credit_card
+2026-10-31 08:03:00,10.0.0.50,10.0.0.2,Authorized Login,Authentication,sec_analyst,mgmt-portal,success,15,Valid MFA session established
+2026-10-31 08:03:30,10.0.0.55,10.0.0.2,Authorized Login,Authentication,admin_user,mgmt-portal,success,20,Valid SSO SAML token asserted
+2026-10-31 08:05:00,198.51.100.88,10.0.0.1,Recon Probe,Reconnaissance,unknown,perimeter-fw,blocked,65,SYN packet sequence scanning ports 21-1024
+
