@@ -17,7 +17,6 @@
   <link rel="stylesheet" href="css/tokens.css">
   <link rel="stylesheet" href="css/layout.css">
   <link rel="stylesheet" href="css/components.css">
-  <link rel="stylesheet" href="css/workspace.css">
 </head>
 
 <body>
@@ -34,8 +33,8 @@
           </svg>
           <span class="brand-title">AUTHGUARD-X</span>
         </div>
-        <h1 class="login-heading">Security Operations Workspace</h1>
-        <p class="login-subheading">Simulate a scenario, inspect the evidence, and document your investigation. Admins and analysts sign in here.</p>
+        <h1 class="login-heading">Security Analyst Portal</h1>
+        <p class="login-subheading">Authenticate to access the Security Operations Center dashboard and incident feeds.</p>
       </div>
 
       <!-- Development Demo Credentials Box -->
@@ -82,7 +81,7 @@
       </form>
 
       <div class="login-footer">
-        <span>Session cookies use HttpOnly and SameSite protections. Sign-in attempts are rate limited.</span>
+        <span>Protected by server-verified session encryption (HttpOnly, SameSite) & IP rate throttling.</span>
       </div>
     </div>
   </div>
@@ -256,7 +255,6 @@
              =================================================================== -->
         <section id="view-overview" class="view-panel active">
           
-          <div class="overview-heading"><div><span class="eyebrow">SECURITY OPERATIONS / OVERVIEW</span><h1>Threat Management Overview</h1><p>Your stored incidents, investigation priorities, and training activity in one place.</p></div><a href="#simulations" class="btn btn-primary">Run a training scenario</a></div>
           <!-- KPI Metrics Row -->
           <div class="kpi-grid">
             <div class="card metric-card">
@@ -298,25 +296,16 @@
               <div id="metric-health" class="metric-value">100</div>
               <div class="metric-footer text-muted">Computed from unresolved risks</div>
             </div>
-            <div class="card metric-card"><div class="metric-header"><span class="metric-label">Resolved Incidents</span><span class="metric-sublabel">Completed triage</span></div><div id="metric-resolved" class="metric-value highlight-success">0</div><div class="metric-footer text-muted">Recorded as resolved</div></div>
           </div>
 
-          <div class="overview-intelligence">
-            <div class="card overview-map-card">
-              <div class="card-header"><div><h3 class="card-title">Global Threat Context</h3><p class="panel-caption">Geographic backdrop · locations in training scenarios are synthetic</p></div><a href="#threat-map" class="btn btn-outline btn-xs">Open simulation map</a></div>
-              <div class="overview-map"><img src="assets/world_map.svg" alt="World map used as geographic context; no live threat feed"><div class="map-summary"><span class="eyebrow">STORED ACTIVITY</span><strong id="overview-map-count">0</strong><span>incident records</span><span class="map-status">Local workspace</span></div><div class="map-caption">No external threat feed · no inferred IP geolocation</div></div>
-            </div>
-            <div class="card priority-card"><div class="card-header"><div><h3 class="card-title">Investigation Priorities</h3><p class="panel-caption">Highest risk in the latest 100 stored incidents</p></div><a href="#incidents" class="text-link">View all</a></div><div id="overview-priorities" aria-live="polite"><p class="panel-caption">Loading stored incidents…</p></div></div>
-          </div>
-          <div class="workflow-strip"><span class="eyebrow">START HERE</span><a href="#simulations">1. Simulate a scenario</a><span aria-hidden="true">→</span><a href="#detection-alerts">2. Inspect alerts</a><span aria-hidden="true">→</span><a href="#incidents">3. Investigate</a><span aria-hidden="true">→</span><a href="#reports">4. Prepare a report</a></div>
           <!-- Severity Breakdown & Threat Simulation Row -->
-          <div class="grid-2-col overview-analysis" style="margin-top: var(--space-4);">
+          <div class="grid-2-col" style="margin-top: var(--space-4);">
             
             <!-- Severity Distribution Card -->
             <div class="card">
               <div class="card-header">
-                <h3 class="card-title">Incident Severity Distribution</h3>
-                <span class="text-muted" style="font-size: var(--text-xs);">All stored incidents</span>
+                <h3 class="card-title">Risk Severity Breakdown</h3>
+                <span class="text-muted" style="font-size: var(--text-xs);">Active posture</span>
               </div>
               <div class="severity-bars">
                 <div class="sev-bar-item">
@@ -353,7 +342,6 @@
               </div>
             </div>
 
-            <div class="card provenance-card"><div class="card-header"><div><h3 class="card-title">Record Provenance</h3><p class="panel-caption">Where the stored incident records came from</p></div></div><div class="provenance-visual"><div id="provenance-ring" class="provenance-ring" role="img" aria-label="Record provenance distribution"><div><strong id="provenance-total">0</strong><span>records</span></div></div><div class="provenance-legend"><span><i></i>Synthetic training <b id="provenance-sim">0</b></span><span><i></i>System / audit <b id="provenance-audit">0</b></span></div></div><p class="panel-caption">These counts describe incident provenance, not verification of imported security logs.</p></div>
             <!-- Threat Simulation Engine Card -->
             <div class="card">
               <div class="card-header">

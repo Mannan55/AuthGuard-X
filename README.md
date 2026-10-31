@@ -5,31 +5,11 @@
 [![Flask](https://img.shields.io/badge/backend-Flask%203.1-black.svg)](https://flask.palletsprojects.com/)
 [![SQLite 3](https://img.shields.io/badge/database-SQLite%203%20WAL-lightgrey.svg)](https://www.sqlite.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Source](https://img.shields.io/badge/source-main-64748b.svg)](https://github.com/Mannan55/AuthGuard-X/tree/main)
+[![Release: v3](https://img.shields.io/badge/release-v1.0.0-green.svg)](https://github.com/Mannan55/AuthGuard-X/releases/tag/v3)
 
 AuthGuard-X is a professional, local-first Security Operations Center (SOC) demonstration, training, detection engineering, and incident response platform. Designed for cybersecurity analysts, educators, and blue teams, it models an enterprise identity and network security monitoring environment that ingests multi-format security logs, runs sliding-window detection rules, correlates threats against MITRE ATT&CK techniques, manages investigations through a 4-stage lifecycle state machine, and generates evidence-grounded investigation reports.
 
-## What does it do?
-
-AuthGuard-X is a practice control room for cybersecurity investigations. Generate a **safe, synthetic scenario** or import supported logs, inspect detection alerts, investigate the related incident, and write an evidence-linked report.
-
-**Start here:** Sign in → **Simulations** → **Detection Alerts** → **Incidents** → **Case Reports**. The overview also links these steps directly.
-
-- **Analysts** review activity, investigate cases, and prepare reports.
-- **Administrators** manage privileged system operations. Both roles share a sign-in page; server permissions control access.
-- Simulation controls create training records. They do not hack remote systems. Marking a case contained documents an action; it does not block an IP or disable an account.
-
-> **Provenance:** Synthetic incidents and geographic simulation markers are training data. Imported records remain unverified input. SHA-256 hashes help detect content changes; they do not establish that an event is authentic or prove a forensic chain of custody. Exact source bytes and normalized representations must be distinguished.
-
-## Interface
-
-The main SOC workspace uses compact dark panels, orange actions, purple secondary accents, and a guided investigation path. Its overview shows stored incident metrics, priorities from the latest 100 records, and incident provenance. The map on the overview is geographic context, not an external threat feed. The separate simulation map remains a training workspace.
-
-![Reference-inspired overview layout](docs/screenshots/34_reference_workspace_preview.jpg)
-
-*Browser layout preview of the empty overview; this image is a visual check, not an authenticated end-to-end test.*
-
-The screenshots below document earlier versions and will differ from the current interface. The terminal-style simulation experience is separate from the main analyst dashboard.
+> **Forensic Integrity & Provenance Disclaimer:** All attack vectors, simulated incident streams, and geographic origins are generated locally with server-enforced provenance (`is_simulated = 1`). Imported log files are hashed using SHA-256 upon ingestion (`exact_source_bytes`) to ensure chain-of-custody. AuthGuard-X does not execute live exploits or rely on unverified external threat feeds.
 
 ---
 
@@ -72,7 +52,7 @@ The screenshots below document earlier versions and will differ from the current
 
 ### 1. Ingestion & Preprocessing (Sprint 4)
 - **Multi-Format Parsers**: Native parsing for Windows Event ID 4625 (Logon Failures), Linux `/var/log/auth.log` (sshd authentication), RFC 5424 Syslog, Palo Alto Firewall traffic, and newline-delimited JSON.
-- **Forensic Chain-of-Custody**: SHA-256 cryptographic hashing of exact raw input bytes (`exact_source_bytes`) to support content-integrity checks; hashes alone do not verify source authenticity.
+- **Forensic Chain-of-Custody**: SHA-256 cryptographic hashing of exact raw input bytes (`exact_source_bytes`) to guarantee evidentiary traceability.
 - **Strict Timestamp Normalization**: UTC normalization preserving source timezone offsets, handling epoch seconds, epoch milliseconds, and malformed dates without synthetic invention.
 
 ### 2. Detection Engineering & Threat Correlation (Sprint 3)
@@ -106,7 +86,7 @@ The screenshots below document earlier versions and will differ from the current
 - **Backend**: Python 3.11+, Flask 3.1, Flask-WTF (CSRF), Flask-Limiter (Rate Limiting), Werkzeug.
 - **Database**: SQLite 3 with Write-Ahead Logging (WAL) and foreign key integrity.
 - **Cryptography**: `bcrypt` (12 rounds) for passwords, `hashlib.sha256` for forensic source integrity.
-- **Frontend**: Vanilla ES6+ JavaScript, with Chart.js and Google Fonts loaded from external CDNs, custom CSS design tokens (8px grid), native SVG icons.
+- **Frontend**: Vanilla ES6+ JavaScript (zero external CDN or node_modules dependencies), custom CSS design tokens (8px grid), native SVG icons.
 - **Testing**: `pytest`, `pytest-cov`, and automated Chromium CDP browser verification.
 - **CI/CD**: GitHub Actions matrix across Python 3.11, 3.12, 3.13 on Ubuntu and Windows.
 
@@ -157,11 +137,11 @@ http://127.0.0.1:5000/
 
 ## Development Demo Credentials
 
-AuthGuard-X includes development demo accounts for local evaluation and testing. The admin username/password can be configured with `DEMO_ADMIN_USER` / `DEMO_ADMIN_PASSWORD`; existing databases may retain an earlier password. Development mode also accepts legacy password aliases, so these accounts must remain local training accounts:
+AuthGuard-X includes development demo accounts for local evaluation and testing:
 
 | Role | Username | Password | Permissions |
 | :--- | :--- | :--- | :--- |
-| **Administrator** | `admin` | `DemoAdmin2026!` (default seeded password) | Full access across all cases, rules, ingestion batches, and reports. |
+| **Administrator** | `admin` *(or `testadmin`)* | `DemoAdminPassword2026!` *(or `admin123`)* | Full access across all cases, rules, ingestion batches, and reports. |
 | **SOC Analyst** | `analyst_john` | `AnalystPassword2026!` | Access to assigned cases, evidence linking, and personal reports. |
 | **SOC Analyst** | `analyst_jane` | `AnalystPassword2026!` | Isolated queue for multi-analyst access testing. |
 
